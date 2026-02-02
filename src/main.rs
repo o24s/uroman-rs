@@ -340,9 +340,7 @@ fn show_samples(uroman: &Uroman) -> Result<(), UromanError> {
 
     println!("---------------------------------------");
 
-    let num_samples = samples.len() as u128;
-    if num_samples > 0 {
-        let avg_duration_ns = total_duration_ns / num_samples;
+    if let Some(avg_duration_ns) = total_duration_ns.checked_div(samples.len() as u128) {
         let avg_duration_us = avg_duration_ns as f64 / 1_000.0;
         let avg_duration_ms = avg_duration_us / 1_000.0;
 

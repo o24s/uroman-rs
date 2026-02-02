@@ -1453,7 +1453,7 @@ impl<'a> Lattice<'a> {
             .map(|m| (m, "percentage"))
             .chain(self.uroman.fraction_connectors.iter().map(|c| (c, "fraction")))
             .collect();
-        markers.sort_by(|(a, _), (b, _)| b.len().cmp(&a.len()));
+        markers.sort_by_key(|(b, _)| std::cmp::Reverse(b.len()));
 
         // Use a label to efficiently skip to the next start position once a match is found.
         'outer: for start in 0..self.s_chars.len() {
