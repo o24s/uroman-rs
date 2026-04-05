@@ -36,7 +36,7 @@ The `uroman-rs` project is available as a crate named uroman. You can use it bot
 To install the `uroman-rs` command-line tool, run the following:
 
 ```bash
-cargo install uroman
+cargo install uroman -F cli
 ```
 
 This will install the executable as `uroman-rs` on your system.
@@ -44,10 +44,9 @@ This will install the executable as `uroman-rs` on your system.
 ### As a Library
 
 Add `uroman-rs` to your project's Cargo.toml.
-For library usage, it's recommended to disable default features to avoid pulling in CLI-specific dependencies.
 
 ```bash
-cargo add uroman --no-default-features
+cargo add uroman
 ```
 
 ## Usage
@@ -127,7 +126,7 @@ Traceback (most recent call last):
 AttributeError: 'NoneType' object has no attribute 'value'
 ```
 
-In contrast, `uroman-rs` handles this input safely and provides a reasonable fallback romanization, demonstrating its enhanced reliability:
+In contrast, `uroman-rs` handles this input safely and provides a reasonable fallback romanization:
 
 ```sh
 $ uroman-rs "百分之多少"
@@ -138,40 +137,36 @@ baifenzhiduoshao
 
 In addition to improving stability, `uroman-rs` also corrects certain romanization errors found in the original implementation. A notable example is the handling of the Tibetan letter `འ` (U+0F60, TIBETAN LETTER -A).
 
-The original script incorrectly romanizes this character, which represents the vowel `a` with a preceding glottal stop `[ʔ]`, by omitting the vowel sound entirely.
+The original script incorrectly romanizes this character, which represents a consonantal onset with the inherent vowel `a`, by omitting the vowel sound entirely.
 
 ```sh
-# Original uroman.py output omits the 'a' sound
 $ uv run uroman.py "འ"
 '
 ```
 
-`uroman-rs` provides the linguistically correct romanization, faithfully representing both the glottal stop (as an apostrophe) and the vowel sound. This ensures a higher quality and more accurate transliteration for Tibetan script.
+`uroman-rs` outputs the linguistically correct romanization, representing both the 'a-chung consonant (as an apostrophe) and the inherent vowel sound.
 
 ```sh
-# uroman-rs provides the correct output
 $ uroman-rs "འ"
 'a
 ```
 
 ### More Precise Romanization by Distinguishing Tibetan Consonants
 
-`uroman-rs` provides a more precise romanization for certain Tibetan characters compared to the original script. The `uroman.py` implementation fails to distinguish between the glottal stop consonant `འ` ('a-chung) and the vowel carrier `ཨ` ('a-chen) when followed by the vowel `ེ` (`e`).
+The `uroman.py` implementation fails to distinguish between the low-tone onset འ ('a-chung) and the high-tone onset ཨ ('a-chen) when followed by the vowel `ེ` (`e`).
 
 The original script produces the same output for both `འེ` and `ཨེ`.
 
 ```sh
-# Original uroman.py output is identical for both characters
 $ uv run uroman.py "ཨེ"
 e
 $ uv run uroman.py "འེ"
 e
 ```
 
-In contrast, `uroman-rs` correctly preserves the leading glottal stop of `འ`, maintaining the distinction between the two characters as intended by the script.
+In contrast, `uroman-rs` correctly preserves the distinct consonant onset of `འ`, maintaining the distinction between the two characters as intended by the script.
 
 ```sh
-# uroman-rs distinguishes the two characters
 $ uroman-rs "ཨེ"
 e
 $ uroman-rs "འེ"

@@ -15,8 +15,8 @@ use std::marker::PhantomData;
 use std::sync::{Arc, LazyLock};
 use thiserror::Error;
 
-pub use crate::edge::Edge;
 use crate::core::UromanInner;
+pub use crate::edge::Edge;
 use crate::lattice::Lattice;
 use crate::utils::decode_unicode_escapes;
 
@@ -38,9 +38,9 @@ pub enum RomFormat {
     Lattice,
 }
 
-pub(crate) use rom_format::RomFormatType;
-pub(crate) use rom_format::IsStrFormat;
 pub(crate) use rom_format::IsEdgeFormat;
+pub(crate) use rom_format::IsStrFormat;
+pub(crate) use rom_format::RomFormatType;
 
 pub mod rom_format {
     use crate::RomanizationError;
@@ -220,9 +220,8 @@ pub enum RomanizationError {
     InternalError(String),
 }
 
-static GLOBAL_UROMAN_INNER: LazyLock<Arc<UromanInner>> = LazyLock::new(|| {
-    Arc::new(UromanInner::new())
-});
+static GLOBAL_UROMAN_INNER: LazyLock<Arc<UromanInner>> =
+    LazyLock::new(|| Arc::new(UromanInner::new()));
 
 /// The main struct for romanization.
 ///
@@ -276,13 +275,9 @@ impl Uroman {
 
         let result = if type_id == TypeId::of::<rom_format::Str>() {
             let best_edges = lat.best_rom_edge_path(0, s.chars().count(), false);
-            RomanizationResult::Str(
-                best_edges.iter().map(|edge| edge.txt()).collect::<String>(),
-            )
+            RomanizationResult::Str(best_edges.iter().map(|edge| edge.txt()).collect::<String>())
         } else if type_id == TypeId::of::<rom_format::Edges>() {
-            RomanizationResult::Edges(
-                lat.best_rom_edge_path(0, s.chars().count(), false)
-            )
+            RomanizationResult::Edges(lat.best_rom_edge_path(0, s.chars().count(), false))
         } else if type_id == TypeId::of::<rom_format::Alts>() {
             let mut best_edges = lat.best_rom_edge_path(0, s.chars().count(), false);
             lat.add_alternatives(&mut best_edges);
@@ -497,9 +492,7 @@ impl Uroman {
                 } else {
                     self.romanize_with_format(line_trimmed, default_lcode, Some(rom_format))
                 };
-                let output = result
-                    .to_string()
-                    .expect("JSON serialization failed");
+                let output = result.to_string().expect("JSON serialization failed");
                 writeln!(writer, "{output}")?;
             }
 
@@ -515,9 +508,7 @@ impl Uroman {
             eprintln!();
         }
         if non_utf8_chars_total > 0 {
-            eprintln!(
-                "Total number of lines with non-UTF-8 characters: {non_utf8_chars_total}"
-            );
+            eprintln!("Total number of lines with non-UTF-8 characters: {non_utf8_chars_total}");
         }
 
         writer.flush()?;
@@ -586,7 +577,13 @@ impl Uroman {
 
                     match rom_format {
                         RomFormat::Str => {
-                            format!("{}{}{} {}", lcode_directive, lcode.unwrap_or(""), "", output)
+                            format!(
+                                "{}{}{} {}",
+                                lcode_directive,
+                                lcode.unwrap_or(""),
+                                "",
+                                output
+                            )
                         }
                         _ => {
                             let meta_edge = format!(r#"[0,0,"","lcode: {}"]"#, lcode.unwrap_or(""));

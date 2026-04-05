@@ -3,9 +3,10 @@
 use std::collections::HashMap;
 
 use crate::{
-    core::UromanInner, utils::{
+    core::UromanInner,
+    utils::{
         dequote_string, has_value_in_double_colon_del_list, slot_value_in_double_colon_del_list,
-    }
+    },
 };
 
 #[allow(unused)]

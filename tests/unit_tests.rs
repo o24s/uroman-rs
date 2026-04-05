@@ -103,7 +103,7 @@ fn test_chinese_fractions_and_percentages() {
         &uroman,
         "今年的增长率是百分之多少？一些分析师认为会更高。",
         None,
-        "jinniandezengzhanglushibaifenzhiduoshao? 1xiefenxishirenweihuigenggao. "
+        "jinniandezengzhanglushibaifenzhiduoshao? 1xiefenxishirenweihuigenggao. ",
     );
 }
 

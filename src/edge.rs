@@ -81,7 +81,12 @@ impl Edge {
     }
 
     /// Creates an initial numeric edge from `uroman.num_props`.
-    pub(crate) fn new_numeric(start: usize, end: usize, char: char, uroman: &UromanInner) -> Option<Self> {
+    pub(crate) fn new_numeric(
+        start: usize,
+        end: usize,
+        char: char,
+        uroman: &UromanInner,
+    ) -> Option<Self> {
         let props_map = uroman.num_props.get(&char.to_string())?;
 
         let rom_text = props_map
@@ -112,7 +117,7 @@ impl Edge {
                 } else {
                     None
                 }
-            },
+            }
             _ => None,
         });
 

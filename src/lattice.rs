@@ -1,8 +1,8 @@
+use crate::core::{AbugidaRuleType, UromanInner};
 use crate::decompositions::DECOMPOSITIONS;
 use crate::edge::{Edge, EdgeData, NumData, NumDataUpdates};
 use crate::rom_rule::RomRule;
 use crate::{Uroman, rom_format};
-use crate::core::{AbugidaRuleType, UromanInner};
 use num_rational::Ratio;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
@@ -66,7 +66,6 @@ static RE_A: LazyLock<(Regex, Regex)> = LazyLock::new(|| {
     )
 });
 
-
 pub(super) struct Lattice<'a> {
     pub s: String,
     pub s_chars: Vec<char>,
@@ -83,7 +82,7 @@ pub(super) struct Lattice<'a> {
     pub max_vertex: usize,
 
     // self.props: dict
-    pub props: HashMap<(String, usize), Option<bool>>,
+    pub props: HashMap<(&'static str, usize), Option<bool>>,
 
     // self.simple_top_rom_cache: dict
     pub simple_top_rom_cache: HashMap<(usize, usize), Option<String>>,
@@ -166,7 +165,7 @@ impl<'a> Lattice<'a> {
     }
 
     pub fn is_at_start_of_word(&mut self, position: usize) -> bool {
-        let key = ("preceded_by_alpha".to_string(), position);
+        let key = ("preceded_by_alpha", position);
         if let Some(cached_val) = self.props.get(&key) {
             return !cached_val.unwrap_or(false);
         }
@@ -213,7 +212,7 @@ impl<'a> Lattice<'a> {
     }
 
     pub fn is_at_end_of_word(&mut self, position: usize) -> bool {
-        let key = ("followed_by_alpha".to_string(), position);
+        let key = ("followed_by_alpha", position);
         if let Some(cached_val) = self.props.get(&key) {
             return !cached_val.unwrap_or(false);
         }
@@ -327,8 +326,11 @@ impl<'a> Lattice<'a> {
                     (adj_position + 1).min(self.max_vertex),
                     true,
                 )
-            })
-            .unwrap_or_else(|| "?".to_string());
+            });
+
+        let Some(next_char_rom) = next_char_rom else {
+            return (true, "not-followed-by-vowel ?".to_string());
+        };
 
         if !VOWEL_START_RE.is_match(&next_char_rom.to_lowercase()) {
             return (true, format!("not-followed-by-vowel {next_char_rom}"));
@@ -385,16 +387,19 @@ impl<'a> Lattice<'a> {
         end: usize,
         simple_search: bool,
     ) -> Option<String> {
-        if end > self.max_vertex { return None; }
+        if end > self.max_vertex {
+            return None;
+        }
         let span_range = (start, end);
-        if !simple_search
-            && let Some(cached_result) = self.simple_top_rom_cache.get(&span_range) {
-                return cached_result.clone();
-            }
+        if !simple_search && let Some(cached_result) = self.simple_top_rom_cache.get(&span_range) {
+            return cached_result.clone();
+        }
 
         let sub: String = self.s_chars[start..end].iter().collect();
         let Some(rules) = self.uroman.rom_rules.get(&sub) else {
-            if !simple_search { self.simple_top_rom_cache.insert(span_range, None); }
+            if !simple_search {
+                self.simple_top_rom_cache.insert(span_range, None);
+            }
             return None;
         };
 
@@ -404,10 +409,14 @@ impl<'a> Lattice<'a> {
         for rule in rules.iter() {
             if self.cand_is_valid(rule, start, end) {
                 if rule.t.is_some() {
-                    if best_rule_with_t.is_none() || rule.n_restr > best_rule_with_t.unwrap().n_restr {
+                    if best_rule_with_t.is_none()
+                        || rule.n_restr > best_rule_with_t.unwrap().n_restr
+                    {
                         best_rule_with_t = Some(rule);
                     }
-                } else if best_rule_without_t.is_none() || rule.n_restr > best_rule_without_t.unwrap().n_restr {
+                } else if best_rule_without_t.is_none()
+                    || rule.n_restr > best_rule_without_t.unwrap().n_restr
+                {
                     best_rule_without_t = Some(rule);
                 }
             }
@@ -462,7 +471,7 @@ impl<'a> Lattice<'a> {
                 if c == braille_space {
                     all_caps = false;
                 } else {
-                    self.props.insert(("is-upper".to_string(), i), Some(true));
+                    self.props.insert(("is-upper", i), Some(true));
                 }
             }
         }
@@ -657,7 +666,7 @@ impl<'a> Lattice<'a> {
                 }
 
                 if let Some(min_len) = min_char_len
-                    && rom_s.len() >= min_len
+                    && rom_s.chars().count() >= min_len
                 {
                     break;
                 }
@@ -676,7 +685,8 @@ impl<'a> Lattice<'a> {
                 }
 
                 if let Some(min_len) = min_char_len {
-                    let current_len: usize = result_edges.iter().map(|e| e.txt().len()).sum();
+                    let current_len: usize =
+                        result_edges.iter().map(|e| e.txt().chars().count()).sum();
                     if current_len >= min_len {
                         break;
                     }
@@ -785,14 +795,14 @@ impl<'a> Lattice<'a> {
                 let mut rom = self
                     .simple_top_romanization_candidate_for_span(i, i + 1, true)
                     .unwrap_or("?".to_string());
-                self.props.insert(("edge-vowel".to_string(), i), None);
+                self.props.insert(("edge-vowel", i), None);
 
                 if self.char_is_vowel_sign(c) {
                     vowel_pos = Some(i);
-                    self.props.insert(("edge-vowel".to_string(), i), Some(true));
+                    self.props.insert(("edge-vowel", i), Some(true));
                     if roms.len() == 1 && roms[0] == "'" {
                         self.props
-                            .insert(("edge-delete".to_string(), i - 1), Some(true));
+                            .insert(("edge-delete", i - 1), Some(true));
                     }
                 } else if self.char_is_subjoined_letter(c) {
                     subjoined_letter_positions.insert(i);
@@ -801,25 +811,25 @@ impl<'a> Lattice<'a> {
                         if c == '\u{0FB0}' {
                             vowel_pos = Some(i - 1);
                             self.props
-                                .insert(("edge-vowel".to_string(), i - 1), Some(true));
+                                .insert(("edge-vowel", i - 1), Some(true));
                         } else {
                             // Other indices suppress the vowel of the previous character
                             self.props
-                                .insert(("edge-vowel".to_string(), i - 1), Some(false));
+                                .insert(("edge-vowel", i - 1), Some(false));
                         }
                     }
                     rom = ROMS_CONSONANT_A_END_RE.replace(&rom, "$1").to_string();
                 } else if c == '\u{0F60}' {
                     // TIBETAN LETTER -A
                     self.props
-                        .insert(("edge-vowel".to_string(), i), Some(false));
+                        .insert(("edge-vowel", i), Some(false));
                     if i > first_letter_position {
                         vowel_pos = Some(i - 1);
                         self.props
-                            .insert(("edge-vowel".to_string(), i - 1), Some(true));
+                            .insert(("edge-vowel", i - 1), Some(true));
                         if i == *positions.last().unwrap() {
                             self.props
-                                .insert(("edge-delete".to_string(), i), Some(true));
+                                .insert(("edge-delete", i), Some(true));
                         }
                     }
                     // If the previous character was a consonant, use "a'"; if a vowel, use "'"
@@ -839,12 +849,12 @@ impl<'a> Lattice<'a> {
                 for &i in &positions {
                     if self
                         .props
-                        .get(&("edge-vowel".to_string(), i))
+                        .get(&("edge-vowel", i))
                         .and_then(|&v| v)
                         .is_none()
                     {
                         self.props
-                            .insert(("edge-vowel".to_string(), i), Some(false));
+                            .insert(("edge-vowel", i), Some(false));
                     }
                 }
             } else {
@@ -856,7 +866,7 @@ impl<'a> Lattice<'a> {
                     let post: String = roms[idx + 1..].join("");
 
                     let cost =
-                        if self.props.get(&("edge-vowel".to_string(), i)) == Some(&Some(false)) {
+                        if self.props.get(&("edge-vowel", i)) == Some(&Some(false)) {
                             20.0
                         } else if positions.len() == 1 {
                             0.0
@@ -892,7 +902,7 @@ impl<'a> Lattice<'a> {
                 if let Some(pos) = best_vowel_pos {
                     for &i in &positions {
                         self.props
-                            .insert(("edge-vowel".to_string(), i), Some(i == pos));
+                            .insert(("edge-vowel", i), Some(i == pos));
                     }
                 }
             }
@@ -922,7 +932,7 @@ impl<'a> Lattice<'a> {
                         && (end - start == 1)
                         && self
                             .props
-                            .get(&("is-upper".to_string(), start))
+                            .get(&("is-upper", start))
                             .copied()
                             .flatten()
                             .unwrap_or(false)
@@ -1449,98 +1459,132 @@ impl<'a> Lattice<'a> {
 
         // Combine all markers and sort them by length descending.
         // This ensures that longer markers (like "百分之") are matched before shorter ones.
-        let mut markers: Vec<_> = self.uroman.percentage_markers.iter()
-            .map(|m| (m, "percentage"))
-            .chain(self.uroman.fraction_connectors.iter().map(|c| (c, "fraction")))
+        let mut markers: Vec<_> = self
+            .uroman
+            .percentage_markers
+            .iter()
+            .map(|m| (m.chars().collect::<Vec<char>>(), "percentage"))
+            .chain(
+                self.uroman
+                    .fraction_connectors
+                    .iter()
+                    .map(|c| (c.chars().collect::<Vec<char>>(), "fraction")),
+            )
             .collect();
         markers.sort_by_key(|(b, _)| std::cmp::Reverse(b.len()));
 
         // Use a label to efficiently skip to the next start position once a match is found.
         'outer: for start in 0..self.s_chars.len() {
-            if let Some((marker_str, marker_type)) = markers.iter().find(|(m, _)| self.s_chars[start..].starts_with(&m.chars().collect::<Vec<_>>())) {
-
-                let marker_end = start + marker_str.chars().count();
+            if let Some((marker_str, marker_type)) = markers
+                .iter()
+                .find(|(m, _)| self.s_chars[start..].starts_with(m.as_slice()))
+            {
+                let marker_end = start + marker_str.len();
 
                 // --- (Number) + Marker/Connector + (Number) ---
                 // Handles cases like "10 / 1", "十分之一", and the special case "百分之一".
                 // The `false` argument is crucial: it means "do NOT skip numeric edges".
                 if let Some(left_edge) = self.best_left_neighbor_edge(start, false)
-                    && let Some(right_edge) = self.best_right_neighbor_edge(marker_end, false) {
-                        // Ensure the pattern is contiguous and connected to the marker.
-                        if left_edge.end() != start || right_edge.start() != marker_end { continue; }
+                    && let Some(right_edge) = self.best_right_neighbor_edge(marker_end, false)
+                {
+                    // Ensure the pattern is contiguous and connected to the marker.
+                    if left_edge.end() != start || right_edge.start() != marker_end {
+                        continue;
+                    }
 
-                        if let (Some(left_val), Some(right_val)) = (
-                            left_edge.value().and_then(|v| if v.fract() == 0.0 { Some(v as i64) } else { None }),
-                            right_edge.value().and_then(|v| if v.fract() == 0.0 { Some(v as i64) } else { None })
-                        ) {
-                            let combined_start = left_edge.start();
-                            let combined_end = right_edge.end();
-                            let mut consumed = false;
-
-                            // if the left value is 100 and the connector is a fraction type (like "分之"),
-                            // treat it as a percentage. This correctly handles "百分之一".
-                            // This also handles explicit percentage markers like "100 % 1".
-                            if left_val == 100 && (*marker_type == "fraction" || *marker_type == "percentage") {
-                                new_edges.push(Edge::new_regular(combined_start, combined_end, format!("{right_val}%"), "percentage".to_string()));
-                                consumed = true;
-                            } else if *marker_type == "fraction" && left_val != 0 {
-                                // Standard fraction case like "十分之一".
-                                let fraction = Ratio::new(right_val, left_val);
-                                new_edges.push(Edge::Numeric {
-                                    data: EdgeData {
-                                        start: combined_start,
-                                        end: combined_end,
-                                        txt: format!("{right_val}/{left_val}"),
-                                        r#type: "fraction".to_string(),
-                                    },
-                                    num_data: NumData {
-                                        orig_txt: format!("{}/{}", right_val, left_val),
-                                        value: None,
-                                        fraction: Some(fraction),
-                                        script: right_edge.get_script(),
-                                        active: true,
-                                        ..Default::default()
-                                    },
-                                });
-                                consumed = true;
+                    if let (Some(left_val), Some(right_val)) = (
+                        left_edge.value().and_then(|v| {
+                            if v.fract() == 0.0 {
+                                Some(v as i64)
+                            } else {
+                                None
                             }
-
-                            if consumed {
-                                edges_to_deactivate.push(left_edge.clone());
-                                edges_to_deactivate.push(right_edge.clone());
-                                // Since we found a match for this `start` position, continue to the next `start`.
-                                continue 'outer;
+                        }),
+                        right_edge.value().and_then(|v| {
+                            if v.fract() == 0.0 {
+                                Some(v as i64)
+                            } else {
+                                None
                             }
+                        }),
+                    ) {
+                        let combined_start = left_edge.start();
+                        let combined_end = right_edge.end();
+                        let mut consumed = false;
+
+                        // if the left value is 100 and the connector is a fraction type (like "分之"),
+                        // treat it as a percentage. This correctly handles "百分之一".
+                        // This also handles explicit percentage markers like "100 % 1".
+                        if left_val == 100
+                            && (*marker_type == "fraction" || *marker_type == "percentage")
+                        {
+                            new_edges.push(Edge::new_regular(
+                                combined_start,
+                                combined_end,
+                                format!("{right_val}%"),
+                                "percentage".to_string(),
+                            ));
+                            consumed = true;
+                        } else if *marker_type == "fraction" && left_val != 0 {
+                            // Standard fraction case like "十分之一".
+                            let fraction = Ratio::new(right_val, left_val);
+                            new_edges.push(Edge::Numeric {
+                                data: EdgeData {
+                                    start: combined_start,
+                                    end: combined_end,
+                                    txt: format!("{right_val}/{left_val}"),
+                                    r#type: "fraction".to_string(),
+                                },
+                                num_data: NumData {
+                                    orig_txt: format!("{}/{}", right_val, left_val),
+                                    value: None,
+                                    fraction: Some(fraction),
+                                    script: right_edge.get_script(),
+                                    active: true,
+                                    ..Default::default()
+                                },
+                            });
+                            consumed = true;
+                        }
+
+                        if consumed {
+                            edges_to_deactivate.push(left_edge.clone());
+                            edges_to_deactivate.push(right_edge.clone());
+                            // Since we found a match for this `start` position, continue to the next `start`.
+                            continue 'outer;
                         }
                     }
+                }
 
                 // --- Marker + (Number) ---
                 // Handles cases like "百分之" + "一". This is the primary path for `percentage-marker`.
                 // The `false` argument is crucial: it means "do NOT skip numeric edges".
                 if *marker_type == "percentage"
-                    && let Some(right_edge) = self.best_right_neighbor_edge(marker_end, false) {
-                        if right_edge.start() != marker_end || !right_edge.is_numeric() {
-                            continue 'outer;
-                        }
-
-                        new_edges.push(Edge::new_regular(
-                            start,
-                            right_edge.end(),
-                            format!("{}%", right_edge.txt()),
-                            "percentage".to_string(),
-                        ));
-                        edges_to_deactivate.push(right_edge.clone());
+                    && let Some(right_edge) = self.best_right_neighbor_edge(marker_end, false)
+                {
+                    if right_edge.start() != marker_end || !right_edge.is_numeric() {
+                        continue 'outer;
                     }
+
+                    new_edges.push(Edge::new_regular(
+                        start,
+                        right_edge.end(),
+                        format!("{}%", right_edge.txt()),
+                        "percentage".to_string(),
+                    ));
+                    edges_to_deactivate.push(right_edge.clone());
                 }
+            }
         }
 
         // Apply the collected changes to the lattice.
         for edge in edges_to_deactivate {
             if let Some(edges) = self.edge_lattice.get_mut(&(edge.start(), edge.end()))
-                && let Some(mut e) = edges.take(&edge) {
-                    e.set_active(false);
-                    edges.insert(e);
-                }
+                && let Some(mut e) = edges.take(&edge)
+            {
+                e.set_active(false);
+                edges.insert(e);
+            }
         }
         for edge in new_edges {
             self.add_edge(edge);
@@ -1601,11 +1645,17 @@ impl<'a> Lattice<'a> {
 
                 if let Some(right_link_ends) = self.right_links.get(&left_edge.end()) {
                     for right_end in right_link_ends {
-                        if let Some(right_edges) = self.edge_lattice.get(&(left_edge.end(), *right_end)) {
+                        if let Some(right_edges) =
+                            self.edge_lattice.get(&(left_edge.end(), *right_end))
+                        {
                             for right_edge in right_edges {
-                                if right_edge.is_numeric() && STARTS_WITH_DIGIT_RE.is_match(right_edge.txt()) {
+                                if right_edge.is_numeric()
+                                    && STARTS_WITH_DIGIT_RE.is_match(right_edge.txt())
+                                {
                                     let mut new_edge = right_edge.clone();
-                                    let has_fraction = new_edge.get_num_data().is_some_and(|d| d.fraction.is_some());
+                                    let has_fraction = new_edge
+                                        .get_num_data()
+                                        .is_some_and(|d| d.fraction.is_some());
                                     let separator = if has_fraction { " " } else { "·" };
                                     new_edge.get_data_mut().txt.insert_str(0, separator);
 
@@ -1620,11 +1670,14 @@ impl<'a> Lattice<'a> {
         }
 
         for edge_to_deactivate in edges_to_deactivate {
-            if let Some(edges) = self.edge_lattice.get_mut(&(edge_to_deactivate.start(), edge_to_deactivate.end()))
-                && let Some(mut e) = edges.take(&edge_to_deactivate) {
-                    e.set_active(false);
-                    edges.insert(e);
-                }
+            if let Some(edges) = self
+                .edge_lattice
+                .get_mut(&(edge_to_deactivate.start(), edge_to_deactivate.end()))
+                && let Some(mut e) = edges.take(&edge_to_deactivate)
+            {
+                e.set_active(false);
+                edges.insert(e);
+            }
         }
 
         for new_edge in edges_to_add {
@@ -1716,35 +1769,33 @@ impl<'a> Lattice<'a> {
             AbugidaRuleType::AO => &RE_AO,
         };
 
-                    let mut base_rom: Option<String>;
-                    let mut base_rom_plus_vowel: Option<String>;
-                    let mut modified_rom = rom.clone();
+        let mut base_rom: Option<String>;
+        let mut base_rom_plus_vowel: Option<String>;
+        let mut modified_rom = rom.clone();
 
         if let Some(caps) = abugida_regexes.0.captures(&rom) {
-                        base_rom = Some(caps[1].to_string());
-                        base_rom_plus_vowel = Some(format!("{}{}", &caps[1], &caps[2]));
+            base_rom = Some(caps[1].to_string());
+            base_rom_plus_vowel = Some(format!("{}{}", &caps[1], &caps[2]));
         } else if let Some(caps) = abugida_regexes.1.captures(&rom) {
-                        base_rom = Some(caps[1].to_string());
-                        base_rom_plus_vowel = Some(format!("{}{}", &caps[1], &caps[2]));
-                        if rom.ends_with('-')
-                            && start + 1 == end
-                            && rom.chars().next().is_some_and(|c| c.is_alphabetic())
-                        {
-                            modified_rom.pop();
-                        }
-                    } else {
-                        base_rom = Some(rom.clone());
-                        base_rom_plus_vowel =
-                            Some(format!("{}{}", rom, &script.abugida_default_vowels[0]));
-                    }
+            base_rom = Some(caps[1].to_string());
+            base_rom_plus_vowel = Some(format!("{}{}", &caps[1], &caps[2]));
+            if rom.ends_with('-')
+                && start + 1 == end
+                && rom.chars().next().is_some_and(|c| c.is_alphabetic())
+            {
+                modified_rom.pop();
+            }
+        } else {
+            base_rom = Some(rom.clone());
+            base_rom_plus_vowel = Some(format!("{}{}", rom, &script.abugida_default_vowels[0]));
+        }
 
-                    if let Some(br) = &base_rom
-                        && !(ABUGIDA_CONSONANT_RE.is_match(br)
-                            || (script_name == "Tibetan" && br == "'"))
-                        {
-                            base_rom = None;
-                            base_rom_plus_vowel = None;
-                        }
+        if let Some(br) = &base_rom
+            && !(ABUGIDA_CONSONANT_RE.is_match(br) || (script_name == "Tibetan" && br == "'"))
+        {
+            base_rom = None;
+            base_rom_plus_vowel = None;
+        }
 
         rom = modified_rom;
         let Some(base_rom) = base_rom else {
@@ -1768,7 +1819,7 @@ impl<'a> Lattice<'a> {
         if script_name == "Tibetan" {
             if self
                 .props
-                .get(&("edge-delete".to_string(), start))
+                .get(&("edge-delete", start))
                 .copied()
                 .flatten()
                 .unwrap_or(false)
@@ -1776,7 +1827,7 @@ impl<'a> Lattice<'a> {
                 return "".to_string();
             } else if self
                 .props
-                .get(&("edge-vowel".to_string(), start))
+                .get(&("edge-vowel", start))
                 .copied()
                 .flatten()
                 .unwrap_or(false)
@@ -1900,12 +1951,13 @@ impl<'a> Lattice<'a> {
 
         // Python: if start+1 == end and rom.isupper() and next_char.islower():
         // Python:     rom = rom.capitalize()
+        let mut chars = rom.chars();
         if end - start == 1
-            && rom.chars().all(|c| c.is_uppercase())
+            && chars.all(|c| c.is_uppercase())
             && next_char.is_some_and(|nc| nc.is_lowercase())
-            && let Some(first) = rom.chars().next()
+            && let Some(first) = chars.next()
         {
-            rom = first.to_uppercase().to_string() + &rom[1..].to_lowercase();
+            rom = first.to_uppercase().to_string() + &chars.as_str().to_lowercase();
         }
 
         // Python: if (prev_char and prev_char in 'っッ\u0A71') ...
@@ -2194,7 +2246,12 @@ impl<'a> Lattice<'a> {
         edges.extend(new_edges_to_add);
     }
 
-    pub fn best_rom_edge_path(&mut self, start: usize, end: usize, skip_num_edge: bool) -> Vec<Edge> {
+    pub fn best_rom_edge_path(
+        &mut self,
+        start: usize,
+        end: usize,
+        skip_num_edge: bool,
+    ) -> Vec<Edge> {
         let mut result = Vec::new();
         let mut current_pos = start;
         while current_pos < end {
@@ -2221,16 +2278,9 @@ impl<'a> Lattice<'a> {
         let mut all_edges: Vec<Edge> = self.edge_lattice.values().flatten().cloned().collect();
 
         all_edges.sort_by(|a, b| {
-            let this = &a;
-            {
-                let this = &this;
-                let data = this.get_data();
-                (data.start, data.end, &data.txt, &data.r#type)
-            }.cmp(&{
-                let this = &b;
-                let data = this.get_data();
-                (data.start, data.end, &data.txt, &data.r#type)
-            })
+            let da = a.get_data();
+            let db = b.get_data();
+            (da.start, da.end, &da.txt, &da.r#type).cmp(&(db.start, db.end, &db.txt, &db.r#type))
         });
 
         if all_edges.is_empty() {

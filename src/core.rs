@@ -1,27 +1,28 @@
 use regex::Regex;
-use unicode_normalization::UnicodeNormalization;
-use unicode_properties::UnicodeGeneralCategory;
+use serde_json::Value as JsonValue;
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
-use serde_json::Value as JsonValue;
+use unicode_normalization::UnicodeNormalization;
+use unicode_properties::UnicodeGeneralCategory;
 
-use crate::{RomRule, utils};
 use crate::rom_rule::RomRules;
 use crate::utils::slot_value_in_double_colon_del_list;
+use crate::{RomRule, utils};
 
 static KAYAH_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"kayah\s+(\S+)\s*$").unwrap());
 static MENDE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"m\d+\s+(\S+)\s*$").unwrap());
 static SPACE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\S\s+\S").unwrap());
 static HANGUL_LEADS: &[&str] = &[
-    "g", "gg", "n", "d", "dd", "r", "m", "b", "bb", "s", "ss", "-", "j", "jj", "c", "k", "t", "p", "h"
+    "g", "gg", "n", "d", "dd", "r", "m", "b", "bb", "s", "ss", "-", "j", "jj", "c", "k", "t", "p",
+    "h",
 ];
 static HANGUL_VOWELS: &[&str] = &[
-    "a", "ae", "ya", "yae", "eo", "e", "yeo", "ye", "o", "wa", "wai", "oe", "yo", "u", "weo",
-    "we", "wi", "yu", "eu", "yi", "i"
+    "a", "ae", "ya", "yae", "eo", "e", "yeo", "ye", "o", "wa", "wai", "oe", "yo", "u", "weo", "we",
+    "wi", "yu", "eu", "yi", "i",
 ];
 static HANGUL_TAILS: &[&str] = &[
-    "-", "g", "gg", "gs", "n", "nj", "nh", "d", "l", "lg", "lm", "lb", "ls", "lt", "lp",
-    "lh", "m", "b", "bs", "s", "ss", "ng", "j", "c", "k", "t", "p", "h"
+    "-", "g", "gg", "gs", "n", "nj", "nh", "d", "l", "lg", "lm", "lb", "ls", "lt", "lp", "lh", "m",
+    "b", "bs", "s", "ss", "ng", "j", "c", "k", "t", "p", "h",
 ];
 
 /// Represents a value that can be an integer, float, or string.
@@ -109,11 +110,7 @@ impl UromanInner {
             "ow",
             "u2r",
         );
-        self.load_rom_file(
-            include_str!("../data/romanization-table.txt"),
-            "man",
-            "rom",
-        );
+        self.load_rom_file(include_str!("../data/romanization-table.txt"), "man", "rom");
         self.load_chinese_pinyin_file(include_str!("../data/Chinese_to_Pinyin.txt"));
         self.load_script_file(include_str!("../data/Scripts.txt"));
         self.load_unicode_data_props(include_str!("../data/UnicodeDataProps.txt"));
@@ -133,46 +130,48 @@ impl UromanInner {
             let json: JsonValue = serde_json::from_str(line).unwrap();
 
             if let Some(obj) = json.as_object()
-                && let Some(txt) = obj.get("txt").and_then(|v| v.as_str()) {
-                    let txt_key = txt.to_string();
+                && let Some(txt) = obj.get("txt").and_then(|v| v.as_str())
+            {
+                let txt_key = txt.to_string();
 
-                    for bool_key in ["is-large-power"] {
-                        if obj.get(bool_key).and_then(|v| v.as_bool()).unwrap_or(false) {
-                            self.dict_bool.insert((bool_key.to_string(), txt_key.clone()), true);
-                        }
+                for bool_key in ["is-large-power"] {
+                    if obj.get(bool_key).and_then(|v| v.as_bool()).unwrap_or(false) {
+                        self.dict_bool
+                            .insert((bool_key.to_string(), txt_key.clone()), true);
                     }
-
-                    let mut prop_map: HashMap<String, Value> = HashMap::new();
-                    for (key, val) in obj {
-                        match val {
-                            JsonValue::Number(n) => {
-                                if let Some(i) = n.as_i64() {
-                                    prop_map.insert(key.clone(), Value::Int(i));
-                                } else if let Some(f) = n.as_f64() {
-                                    prop_map.insert(key.clone(), Value::Float(f));
-                                }
-                            }
-                            JsonValue::String(s) => {
-                                prop_map.insert(key.clone(), Value::String(s.clone()));
-                            }
-                            JsonValue::Bool(b) => {
-                                prop_map.insert(key.clone(), Value::Int(if *b { 1 } else { 0 }));
-                            }
-                            JsonValue::Array(arr) => {
-                                let mut values = Vec::new();
-                                for item in arr {
-                                    if let Some(i) = item.as_i64() {
-                                        values.push(Value::Int(i));
-                                    }
-                                }
-                                prop_map.insert(key.clone(), Value::Array(values));
-                            }
-                            _ => {}
-                        }
-                    }
-
-                    self.num_props.insert(txt_key, prop_map);
                 }
+
+                let mut prop_map: HashMap<String, Value> = HashMap::new();
+                for (key, val) in obj {
+                    match val {
+                        JsonValue::Number(n) => {
+                            if let Some(i) = n.as_i64() {
+                                prop_map.insert(key.clone(), Value::Int(i));
+                            } else if let Some(f) = n.as_f64() {
+                                prop_map.insert(key.clone(), Value::Float(f));
+                            }
+                        }
+                        JsonValue::String(s) => {
+                            prop_map.insert(key.clone(), Value::String(s.clone()));
+                        }
+                        JsonValue::Bool(b) => {
+                            prop_map.insert(key.clone(), Value::Int(if *b { 1 } else { 0 }));
+                        }
+                        JsonValue::Array(arr) => {
+                            let mut values = Vec::new();
+                            for item in arr {
+                                if let Some(i) = item.as_i64() {
+                                    values.push(Value::Int(i));
+                                }
+                            }
+                            prop_map.insert(key.clone(), Value::Array(values));
+                        }
+                        _ => {}
+                    }
+                }
+
+                self.num_props.insert(txt_key, prop_map);
+            }
         }
     }
 
@@ -286,7 +285,7 @@ impl UromanInner {
                     let abugida_rule_type = match (vowels_regex1.as_str(), vowels_regex2.as_str()) {
                         ("a|o", "a+|o+") => AbugidaRuleType::AO,
                         ("a", "a+") => AbugidaRuleType::A,
-                        _ => unreachable!()
+                        _ => unreachable!(),
                     };
 
                     Some(abugida_rule_type)
