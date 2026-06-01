@@ -1637,7 +1637,7 @@ impl<'a> Lattice<'a> {
         let mut edges_to_add: Vec<Edge> = Vec::new();
         let mut edges_to_deactivate: Vec<Edge> = Vec::new();
 
-        for (_, left_edges) in self.edge_lattice.iter() {
+        for left_edges in self.edge_lattice.values() {
             for left_edge in left_edges.iter() {
                 if !ENDS_WITH_DIGIT_RE.is_match(left_edge.txt()) {
                     continue;
@@ -1787,7 +1787,7 @@ impl<'a> Lattice<'a> {
             }
         } else {
             base_rom = Some(rom.clone());
-            base_rom_plus_vowel = Some(format!("{}{}", rom, &script.abugida_default_vowels[0]));
+            base_rom_plus_vowel = Some(format!("{}{}", rom, script.abugida_default_vowels[0]));
         }
 
         if let Some(br) = &base_rom
