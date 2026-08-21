@@ -1,4 +1,4 @@
-use crate::core::{UromanInner, Value};
+use crate::dicts::Dicts;
 use num_rational::Ratio;
 use serde::Serialize;
 use std::hash::{Hash, Hasher};
@@ -80,90 +80,35 @@ impl Edge {
         })
     }
 
-    /// Creates an initial numeric edge from `uroman.num_props`.
-    pub(crate) fn new_numeric(
-        start: usize,
-        end: usize,
-        char: char,
-        uroman: &UromanInner,
-    ) -> Option<Self> {
-        let props_map = uroman.num_props.get(&char.to_string())?;
+    /// Creates an initial numeric edge from the character's numeric
+    /// properties dictionary entry.
+    pub(crate) fn new_numeric(start: usize, end: usize, char: char, dicts: &Dicts) -> Option<Self> {
+        let props = dicts.num_prop(char.encode_utf8(&mut [0; 4]))?;
 
-        let rom_text = props_map
-            .get("rom")
-            .and_then(|v| match v {
-                Value::String(s) => Some(s.clone()),
-                _ => None,
-            })
+        let rom_text = props
+            .rom()
+            .map(str::to_string)
             .unwrap_or_else(|| char.to_string());
 
-        let value = props_map.get("value").and_then(|v| match v {
-            Value::Int(i) => Some(*i as f64),
-            Value::Float(f) => Some(*f),
-            _ => None,
-        });
-
-        let fraction = props_map.get("fraction").and_then(|v| match v {
-            Value::String(s) => s
-                .split_once('/')
-                .and_then(|(num, den)| Some(Ratio::new(num.parse().ok()?, den.parse().ok()?))),
-            Value::Array(arr) if arr.len() == 2 => {
-                if let (Some(Value::Int(num)), Some(Value::Int(den))) = (arr.first(), arr.get(1)) {
-                    if *den != 0 {
-                        Some(Ratio::new(*num, *den))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        });
-
-        let r#type = props_map
-            .get("type")
-            .and_then(|v| match v {
-                Value::String(s) => Some(s.clone()),
-                _ => None,
-            })
-            .unwrap_or_default();
-
-        let is_large_power = props_map
-            .get("is-large-power")
-            .is_some_and(|v| matches!(v, Value::Int(1)));
-
-        let num_base = props_map.get("base").and_then(|v| match v {
-            Value::Int(i) => Some(*i),
-            _ => None,
-        });
-
-        let base_multiplier = props_map.get("mult").and_then(|v| match v {
-            Value::Int(i) => Some(*i as f64),
-            Value::Float(f) => Some(*f),
-            _ => None,
-        });
-
-        let script = props_map.get("script").and_then(|v| match v {
-            Value::String(s) => Some(s.clone()),
-            _ => None,
-        });
+        let fraction = props
+            .fraction_parts()
+            .map(|(num, den)| Ratio::new(num, den));
 
         let edge = Edge::Numeric {
             data: EdgeData {
                 start,
                 end,
                 txt: rom_text,
-                r#type,
+                r#type: props.num_type().to_string(),
             },
             num_data: NumData {
                 orig_txt: char.to_string(),
-                value,
+                value: props.value(),
                 fraction,
-                num_base,
-                base_multiplier,
-                script,
-                is_large_power,
+                num_base: props.base(),
+                base_multiplier: props.mult(),
+                script: props.script().map(str::to_string),
+                is_large_power: props.is_large_power,
                 active: true,
                 ..Default::default()
             },

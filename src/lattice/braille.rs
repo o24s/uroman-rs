@@ -1,43 +1,42 @@
+//! Braille-specific passes: capitalization markers and number sequences.
+
 use super::Lattice;
 use crate::edge::Edge;
 
-impl<'a> Lattice<'a> {
-    pub fn prep_braille(&mut self) {
-        if !self
-            .contains_script
-            .get("Braille")
-            .copied()
-            .unwrap_or(false)
-        {
+const BRAILLE_NUMBER_MARK: char = '\u{283C}';
+const BRAILLE_PERIOD: char = '\u{2832}';
+const BRAILLE_COMMA: char = '\u{2802}';
+const BRAILLE_DOTS6: char = '\u{2820}';
+const BRAILLE_SPACE: char = '\u{2800}';
+
+impl Lattice {
+    /// Marks positions covered by a double-dots-6 all-caps prefix.
+    pub(crate) fn prep_braille(&mut self) {
+        if !self.has_script("Braille") {
             return;
         }
 
-        let dots6 = '\u{2820}';
-        let braille_space = '\u{2800}';
         let mut all_caps = false;
 
         for i in 0..self.s_chars.len() {
             let c = self.s_chars[i];
 
-            if i >= 1 && self.s_chars[i - 1] == dots6 && c == dots6 {
+            if i >= 1 && self.s_chars[i - 1] == BRAILLE_DOTS6 && c == BRAILLE_DOTS6 {
                 all_caps = true;
             } else if all_caps {
-                if c == braille_space {
+                if c == BRAILLE_SPACE {
                     all_caps = false;
                 } else {
-                    self.props.insert(("is-upper", i), Some(true));
+                    self.props.is_upper.insert(i);
                 }
             }
         }
     }
 
-    pub fn add_braille_numbers(&mut self) {
-        if !self
-            .contains_script
-            .get("Braille")
-            .copied()
-            .unwrap_or(false)
-        {
+    /// Collects digit sequences introduced by the Braille number mark into
+    /// numeric edges.
+    pub(crate) fn add_braille_numbers(&mut self) {
+        if !self.has_script("Braille") {
             return;
         }
 
@@ -47,19 +46,16 @@ impl<'a> Lattice<'a> {
         let mut start: Option<usize> = None;
 
         for (i, &char) in self.s_chars.iter().enumerate() {
-            if char == '\u{283C}' {
-                // number mark
+            if char == BRAILLE_NUMBER_MARK {
                 if start.is_none() {
                     start = Some(i);
                 }
             } else if start.is_some() {
-                if let Some(digit_s) = self.braille_digit(char) {
+                if let Some(digit_s) = braille_digit(char) {
                     num_s.push_str(&digit_s);
-                } else if char == '\u{2832}' {
-                    // period
+                } else if char == BRAILLE_PERIOD {
                     num_s.push('.');
-                } else if char == '\u{2802}' {
-                    // comma
+                } else if char == BRAILLE_COMMA {
                     num_s.push(',');
                 } else {
                     if !num_s.is_empty() {
@@ -85,35 +81,35 @@ impl<'a> Lattice<'a> {
                     start_pos,
                     end_pos,
                     value,
-                    "number".to_string(),        // type
-                    Some("Braille".to_string()), // script
-                    None,                        // num_base
-                    None,                        // n_decimals
+                    "number".to_string(),
+                    Some("Braille".to_string()),
+                    None,
+                    None,
                     txt,
                 );
                 self.add_edge(new_edge);
             }
         }
     }
+}
 
-    /// Convert Braille characters to their corresponding numeric string representations ("0"-"9").
-    fn braille_digit(&self, char: char) -> Option<String> {
-        const BRAILLE_DIGITS: [char; 10] = [
-            '\u{281A}', // 0
-            '\u{2801}', // 1
-            '\u{2803}', // 2
-            '\u{2809}', // 3
-            '\u{2819}', // 4
-            '\u{2811}', // 5
-            '\u{280B}', // 6
-            '\u{281B}', // 7
-            '\u{2813}', // 8
-            '\u{280A}', // 9
-        ];
+/// Converts a Braille digit character to its numeric string ("0"-"9").
+fn braille_digit(char: char) -> Option<String> {
+    const BRAILLE_DIGITS: [char; 10] = [
+        '\u{281A}', // 0
+        '\u{2801}', // 1
+        '\u{2803}', // 2
+        '\u{2809}', // 3
+        '\u{2819}', // 4
+        '\u{2811}', // 5
+        '\u{280B}', // 6
+        '\u{281B}', // 7
+        '\u{2813}', // 8
+        '\u{280A}', // 9
+    ];
 
-        BRAILLE_DIGITS
-            .iter()
-            .position(|&d| d == char)
-            .map(|pos| pos.to_string())
-    }
+    BRAILLE_DIGITS
+        .iter()
+        .position(|&d| d == char)
+        .map(|pos| pos.to_string())
 }

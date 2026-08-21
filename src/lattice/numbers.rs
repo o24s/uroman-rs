@@ -1,35 +1,52 @@
-use super::Lattice;
-use crate::edge::{Edge, EdgeData, NumData, NumDataUpdates};
-use num_rational::Ratio;
-use regex::Regex;
+//! Number recognition: combines per-character numeric edges into digit
+//! sequences, base multiplications and additions, fractions, percentages and
+//! signs, layered as rule-based passes (D1, G1-G4, G6, F1) that mirror the
+//! original Python implementation.
+
 use std::collections::HashSet;
 use std::sync::LazyLock;
+
+use num_rational::Ratio;
+use regex::Regex;
 use unicode_properties::{GeneralCategory, UnicodeGeneralCategory};
+
+use super::Lattice;
+use crate::edge::{Edge, EdgeData, NumData, NumDataUpdates};
 
 static STARTS_WITH_DIGIT_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\d").unwrap());
 static ENDS_WITH_DIGIT_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\d$").unwrap());
 
-impl<'a> Lattice<'a> {
-    fn is_gap_null_edge(edge: &Edge) -> bool {
-        matches!(edge, Edge::Numeric { num_data, .. } if num_data.orig_txt == "零" || num_data.orig_txt == "〇")
+fn is_power_of_10(mut n: i64) -> bool {
+    if n <= 0 {
+        return false;
     }
-
-    fn edge_is_digit(edge: &Edge) -> bool {
-        if let Edge::Numeric { data, num_data } = edge
-            && data.r#type == "digit"
-            && data.end - data.start == 1
-            && let Some(val) = num_data.value
-        {
-            return val.fract() == 0.0 && (0.0..=9.0).contains(&val);
-        }
-        false
+    while n % 10 == 0 {
+        n /= 10;
     }
+    n == 1
+}
 
+fn is_gap_null_edge(edge: &Edge) -> bool {
+    matches!(edge, Edge::Numeric { num_data, .. } if num_data.orig_txt == "零" || num_data.orig_txt == "〇")
+}
+
+fn edge_is_digit(edge: &Edge) -> bool {
+    if let Edge::Numeric { data, num_data } = edge
+        && data.r#type == "digit"
+        && data.end - data.start == 1
+        && let Some(val) = num_data.value
+    {
+        return val.fract() == 0.0 && (0.0..=9.0).contains(&val);
+    }
+    false
+}
+
+impl Lattice {
     fn initialize_num_edges(&mut self) -> Vec<Edge> {
         let mut num_edges = Vec::new();
         for start in 0..self.s_chars.len() {
             if let Some(edge) =
-                Edge::new_numeric(start, start + 1, self.s_chars[start], self.uroman)
+                Edge::new_numeric(start, start + 1, self.s_chars[start], &self.dicts)
             {
                 self.add_edge(edge.clone());
                 num_edges.push(edge);
@@ -38,10 +55,8 @@ impl<'a> Lattice<'a> {
         num_edges
     }
 
-    // Implements numeric processing by chaining rule-based passes. This layered approach
-    // safely replicates the dynamic logic of the original Python implementation in Rust,
-    // avoiding complex borrowing and mutation issues.
-    pub fn add_numbers(&mut self) {
+    /// Runs all numeric passes in order.
+    pub(crate) fn add_numbers(&mut self) {
         let mut active_edges = self.initialize_num_edges();
 
         active_edges = self.apply_d1_digits(active_edges);
@@ -58,14 +73,15 @@ impl<'a> Lattice<'a> {
         self.add_fallback_unicode_numbers();
     }
 
-    #[inline]
+    /// D1: joins adjacent single digits (and one decimal point) into one
+    /// number.
     fn apply_d1_digits(&mut self, prev_pass_edges: Vec<Edge>) -> Vec<Edge> {
         let mut next_pass_edges = Vec::new();
         let mut i = 0;
         while i < prev_pass_edges.len() {
             let start_edge = &prev_pass_edges[i];
 
-            if !Self::edge_is_digit(start_edge) {
+            if !edge_is_digit(start_edge) {
                 next_pass_edges.push(start_edge.clone());
                 i += 1;
                 continue;
@@ -84,7 +100,7 @@ impl<'a> Lattice<'a> {
                     break 'seq;
                 }
 
-                if Self::edge_is_digit(next_edge) {
+                if edge_is_digit(next_edge) {
                     sub_edges.push(next_edge.clone());
                     combined_orig_txt.push_str(next_edge.orig_txt());
                     current_val_s.push_str(next_edge.txt());
@@ -97,7 +113,7 @@ impl<'a> Lattice<'a> {
                 {
                     if let Some(digit_after_dot) = prev_pass_edges
                         .get(j)
-                        .filter(|e| e.start() == last_edge_end + 1 && Self::edge_is_digit(e))
+                        .filter(|e| e.start() == last_edge_end + 1 && edge_is_digit(e))
                     {
                         sub_edges.push(digit_after_dot.clone());
                         combined_orig_txt.push('.');
@@ -149,7 +165,7 @@ impl<'a> Lattice<'a> {
         next_pass_edges
     }
 
-    #[inline]
+    /// G1: digit × base (e.g. 五百 = 5 × 100).
     fn apply_g1_multiplication(&mut self, prev_pass_edges: Vec<Edge>) -> Vec<Edge> {
         let mut next_pass_edges = Vec::new();
         let mut i = 0;
@@ -197,7 +213,7 @@ impl<'a> Lattice<'a> {
         next_pass_edges
     }
 
-    #[inline]
+    /// G2: descending-base addition (e.g. 百二十三 = 100 + 20 + 3).
     fn apply_g2_addition(&mut self, prev_pass_edges: Vec<Edge>) -> Vec<Edge> {
         let mut next_pass_edges = Vec::new();
         let mut i = 0;
@@ -221,7 +237,7 @@ impl<'a> Lattice<'a> {
                     break;
                 }
 
-                let prev_non_null = sub_edges.iter().rev().find(|e| !Self::is_gap_null_edge(e));
+                let prev_non_null = sub_edges.iter().rev().find(|e| !is_gap_null_edge(e));
                 let can_combine = if prev_non_null.is_some_and(|p| p.is_large_power()) {
                     false
                 } else if let (Some(prev), Some(right_val), Some(right_base)) =
@@ -230,7 +246,7 @@ impl<'a> Lattice<'a> {
                     prev.get_num_base().unwrap_or(0) > right_val as i64
                         && prev.get_num_base().unwrap_or(0) > right_base
                 } else {
-                    Self::is_gap_null_edge(right_edge)
+                    is_gap_null_edge(right_edge)
                 };
 
                 if can_combine {
@@ -266,7 +282,7 @@ impl<'a> Lattice<'a> {
         next_pass_edges
     }
 
-    #[inline]
+    /// G3: number × large power (e.g. 二百万 = 200 × 10000).
     fn apply_g3_large_power_multiplication(&mut self, prev_pass_edges: Vec<Edge>) -> Vec<Edge> {
         let mut next_pass_edges = Vec::new();
         let mut i = 0;
@@ -309,7 +325,8 @@ impl<'a> Lattice<'a> {
         next_pass_edges
     }
 
-    #[inline]
+    /// G4: adds large blocks in descending order (e.g. 一兆 + 二千万 + …),
+    /// re-tagging trailing single digits by the preceding base.
     fn apply_g4_large_block_addition(&mut self, prev_pass_edges: Vec<Edge>) -> Vec<Edge> {
         let mut next_pass_edges = Vec::new();
         let mut i = 0;
@@ -391,28 +408,25 @@ impl<'a> Lattice<'a> {
         next_pass_edges
     }
 
-    #[inline]
+    /// Fractions (`十分之一` -> 1/10) and percentages (`百分之五十` -> 50%).
     fn apply_fraction_and_percentage_patterns(&mut self) {
         let mut new_edges: Vec<Edge> = Vec::new();
         let mut edges_to_deactivate: Vec<Edge> = Vec::new();
 
-        // Combine all markers and sort them by length descending.
-        // This ensures that longer markers (like "百分之") are matched before shorter ones.
-        let mut markers: Vec<_> = self
-            .uroman
-            .percentage_markers
-            .iter()
+        // Combine all markers, longest first, so that e.g. "百分之" wins
+        // over shorter ones.
+        let mut markers: Vec<(Vec<char>, &str)> = self
+            .dicts
+            .percentage_markers()
             .map(|m| (m.chars().collect::<Vec<char>>(), "percentage"))
             .chain(
-                self.uroman
-                    .fraction_connectors
-                    .iter()
+                self.dicts
+                    .fraction_connectors()
                     .map(|c| (c.chars().collect::<Vec<char>>(), "fraction")),
             )
             .collect();
         markers.sort_by_key(|(b, _)| std::cmp::Reverse(b.len()));
 
-        // Use a label to efficiently skip to the next start position once a match is found.
         'outer: for start in 0..self.s_chars.len() {
             if let Some((marker_str, marker_type)) = markers
                 .iter()
@@ -421,8 +435,8 @@ impl<'a> Lattice<'a> {
                 let marker_end = start + marker_str.len();
 
                 // --- (Number) + Marker/Connector + (Number) ---
-                // Handles cases like "10 / 1", "十分之一", and the special case "百分之一".
-                // The `false` argument is crucial: it means "do NOT skip numeric edges".
+                // Handles "10 / 1", "十分之一", and the special case "百分之一".
+                // `false`: do NOT skip numeric edges.
                 if let Some(left_edge) = self.best_left_neighbor_edge(start, false)
                     && let Some(right_edge) = self.best_right_neighbor_edge(marker_end, false)
                 {
@@ -451,9 +465,9 @@ impl<'a> Lattice<'a> {
                         let combined_end = right_edge.end();
                         let mut consumed = false;
 
-                        // if the left value is 100 and the connector is a fraction type (like "分之"),
-                        // treat it as a percentage. This correctly handles "百分之一".
-                        // This also handles explicit percentage markers like "100 % 1".
+                        // A left value of 100 with a fraction connector is a
+                        // percentage ("百分之一"); explicit percentage markers
+                        // ("100 % 1") too.
                         if left_val == 100
                             && (*marker_type == "fraction" || *marker_type == "percentage")
                         {
@@ -465,7 +479,7 @@ impl<'a> Lattice<'a> {
                             ));
                             consumed = true;
                         } else if *marker_type == "fraction" && left_val != 0 {
-                            // Standard fraction case like "十分之一".
+                            // Standard fraction like "十分之一".
                             let fraction = Ratio::new(right_val, left_val);
                             new_edges.push(Edge::Numeric {
                                 data: EdgeData {
@@ -475,7 +489,7 @@ impl<'a> Lattice<'a> {
                                     r#type: "fraction".to_string(),
                                 },
                                 num_data: NumData {
-                                    orig_txt: format!("{}/{}", right_val, left_val),
+                                    orig_txt: format!("{right_val}/{left_val}"),
                                     value: None,
                                     fraction: Some(fraction),
                                     script: right_edge.get_script(),
@@ -489,15 +503,13 @@ impl<'a> Lattice<'a> {
                         if consumed {
                             edges_to_deactivate.push(left_edge.clone());
                             edges_to_deactivate.push(right_edge.clone());
-                            // Since we found a match for this `start` position, continue to the next `start`.
                             continue 'outer;
                         }
                     }
                 }
 
                 // --- Marker + (Number) ---
-                // Handles cases like "百分之" + "一". This is the primary path for `percentage-marker`.
-                // The `false` argument is crucial: it means "do NOT skip numeric edges".
+                // Handles "百分之" + "一": the primary `percentage-marker` path.
                 if *marker_type == "percentage"
                     && let Some(right_edge) = self.best_right_neighbor_edge(marker_end, false)
                 {
@@ -516,62 +528,46 @@ impl<'a> Lattice<'a> {
             }
         }
 
-        // Apply the collected changes to the lattice.
         for edge in edges_to_deactivate {
-            if let Some(edges) = self.edge_lattice.get_mut(&(edge.start(), edge.end()))
-                && let Some(mut e) = edges.take(&edge)
-            {
-                e.set_active(false);
-                edges.insert(e);
-            }
+            self.deactivate_edge(&edge);
         }
         for edge in new_edges {
             self.add_edge(edge);
         }
     }
 
-    #[inline]
+    /// G6: attaches directly preceding plus/minus signs to numbers.
     fn apply_g6_plus_minus_signs(&mut self, active_edges: &[Edge]) {
+        let signed: [(Vec<&str>, char); 2] = [
+            (self.dicts.minus_signs().collect(), '-'),
+            (self.dicts.plus_signs().collect(), '+'),
+        ];
+
         for edge in active_edges.iter().filter(|e| e.value().is_some()) {
             let edge_start_char_idx = edge.start();
 
-            for minus_sign in &self.uroman.minus_signs {
-                let sign_char_len = minus_sign.chars().count();
-                let sign_as_chars: Vec<char> = minus_sign.chars().collect();
-                if let Some(start_pos_char_idx) = edge_start_char_idx.checked_sub(sign_char_len)
-                    && self.s_chars.get(start_pos_char_idx..edge_start_char_idx)
-                        == Some(sign_as_chars.as_slice())
-                {
-                    let new_edge = Edge::new_regular(
-                        start_pos_char_idx,
-                        edge.end(),
-                        format!("-{}", edge.txt()),
-                        format!("{} -", edge.r#type()),
-                    );
-                    self.add_edge(new_edge);
-                }
-            }
-
-            for plus_sign in &self.uroman.plus_signs {
-                let sign_char_len = plus_sign.chars().count();
-                let sign_as_chars: Vec<char> = plus_sign.chars().collect();
-                if let Some(start_pos_char_idx) = edge_start_char_idx.checked_sub(sign_char_len)
-                    && self.s_chars.get(start_pos_char_idx..edge_start_char_idx)
-                        == Some(sign_as_chars.as_slice())
-                {
-                    let new_edge = Edge::new_regular(
-                        start_pos_char_idx,
-                        edge.end(),
-                        format!("+{}", edge.txt()),
-                        format!("{} +", edge.r#type()),
-                    );
-                    self.add_edge(new_edge);
+            for (signs, sign_char) in &signed {
+                for sign in signs {
+                    let sign_as_chars: Vec<char> = sign.chars().collect();
+                    if let Some(start_pos_char_idx) =
+                        edge_start_char_idx.checked_sub(sign_as_chars.len())
+                        && self.s_chars.get(start_pos_char_idx..edge_start_char_idx)
+                            == Some(sign_as_chars.as_slice())
+                    {
+                        let new_edge = Edge::new_regular(
+                            start_pos_char_idx,
+                            edge.end(),
+                            format!("{sign_char}{}", edge.txt()),
+                            format!("{} {sign_char}", edge.r#type()),
+                        );
+                        self.add_edge(new_edge);
+                    }
                 }
             }
         }
     }
 
-    #[inline]
+    /// F1: separates a number directly following another number's digits.
     fn apply_f1_final_adjustments(&mut self) {
         let mut edges_to_add: Vec<Edge> = Vec::new();
         let mut edges_to_deactivate: Vec<Edge> = Vec::new();
@@ -608,15 +604,8 @@ impl<'a> Lattice<'a> {
             }
         }
 
-        for edge_to_deactivate in edges_to_deactivate {
-            if let Some(edges) = self
-                .edge_lattice
-                .get_mut(&(edge_to_deactivate.start(), edge_to_deactivate.end()))
-                && let Some(mut e) = edges.take(&edge_to_deactivate)
-            {
-                e.set_active(false);
-                edges.insert(e);
-            }
+        for edge in edges_to_deactivate {
+            self.deactivate_edge(&edge);
         }
 
         for new_edge in edges_to_add {
@@ -624,7 +613,18 @@ impl<'a> Lattice<'a> {
         }
     }
 
-    #[inline]
+    /// Marks an edge inactive in place within the lattice.
+    fn deactivate_edge(&mut self, edge: &Edge) {
+        if let Some(edges) = self.edge_lattice.get_mut(&(edge.start(), edge.end()))
+            && let Some(mut e) = edges.take(edge)
+        {
+            e.set_active(false);
+            edges.insert(e);
+        }
+    }
+
+    /// Deactivates numerals that should not stand alone (e.g. financial
+    /// forms like 兩/參, or single characters with values > 1000).
     fn deactivate_exceptional_singles(&mut self, num_edges: &mut [Edge]) {
         let exceptional_chars: HashSet<&str> = ["兩", "参", "參", "伍", "陆", "陸", "什", "京兆"]
             .into_iter()
@@ -649,7 +649,7 @@ impl<'a> Lattice<'a> {
         }
     }
 
-    #[inline]
+    /// Adds plain edges for decimal digits not covered by any numeric edge.
     fn add_fallback_unicode_numbers(&mut self) {
         let mut new_edges_to_add = Vec::new();
         for (start, &char) in self.s_chars.iter().enumerate() {
@@ -676,14 +676,4 @@ impl<'a> Lattice<'a> {
             self.add_edge(edge);
         }
     }
-}
-
-fn is_power_of_10(mut n: i64) -> bool {
-    if n <= 0 {
-        return false;
-    }
-    while n % 10 == 0 {
-        n /= 10;
-    }
-    n == 1
 }

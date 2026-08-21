@@ -1,7 +1,13 @@
-use super::Lattice;
-use regex::Regex;
+//! Word- and syllable-boundary predicates used to check contextual rule
+//! restrictions (`use-only-at-start-of-word`, `t-end-of-syllable`, …).
+
 use std::sync::LazyLock;
+
+use regex::Regex;
 use unicode_properties::{GeneralCategoryGroup, UnicodeGeneralCategory};
+
+use super::{Lattice, is_braille_char};
+use crate::utils::char_is_nonspacing_mark;
 
 static P_L_OR_M: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[\p{L}\p{M}]").unwrap());
 static P_L_OR_M_END: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[\p{L}\p{M}]$").unwrap());
@@ -9,21 +15,19 @@ static CONSONANT_END_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"[bcdfghjklmnpqrstvxz]$").unwrap());
 static VOWEL_START_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[aeiou]").unwrap());
 
-impl<'a> Lattice<'a> {
-    pub fn is_at_start_of_word(&mut self, position: usize) -> bool {
-        let key = ("preceded_by_alpha", position);
-        if let Some(cached_val) = self.props.get(&key) {
-            return !cached_val.unwrap_or(false);
+impl Lattice {
+    pub(super) fn is_at_start_of_word(&mut self, position: usize) -> bool {
+        if let Some(&preceded_by_alpha) = self.props.preceded_by_alpha.get(&position) {
+            return !preceded_by_alpha;
         }
 
         if position > 0 {
             let prev_char = self.s_chars[position - 1];
-            // Python: `(\pL|\pM)`
             if matches!(
                 prev_char.general_category_group(),
                 GeneralCategoryGroup::Letter | GeneralCategoryGroup::Mark
             ) {
-                self.props.insert(key, Some(true));
+                self.props.preceded_by_alpha.insert(position, true);
                 return false;
             }
         }
@@ -37,14 +41,12 @@ impl<'a> Lattice<'a> {
                                 last_char.general_category_group(),
                                 GeneralCategoryGroup::Letter | GeneralCategoryGroup::Mark
                             ) {
-                                self.props.insert(key, Some(true));
+                                self.props.preceded_by_alpha.insert(position, true);
                                 return false;
                             }
                             // A special case of Braille
-                            let first_char_is_braille =
-                                ('\u{2800}'..='\u{28FF}').contains(&self.s_chars[position]);
-                            if first_char_is_braille && last_char == '\'' {
-                                self.props.insert(key, Some(true));
+                            if is_braille_char(self.s_chars[position]) && last_char == '\'' {
+                                self.props.preceded_by_alpha.insert(position, true);
                                 return false;
                             }
                         }
@@ -53,14 +55,13 @@ impl<'a> Lattice<'a> {
             }
         }
 
-        self.props.insert(key, Some(false));
+        self.props.preceded_by_alpha.insert(position, false);
         true
     }
 
-    pub fn is_at_end_of_word(&mut self, position: usize) -> bool {
-        let key = ("followed_by_alpha", position);
-        if let Some(cached_val) = self.props.get(&key) {
-            return !cached_val.unwrap_or(false);
+    pub(super) fn is_at_end_of_word(&mut self, position: usize) -> bool {
+        if let Some(&followed_by_alpha) = self.props.followed_by_alpha.get(&position) {
+            return !followed_by_alpha;
         }
 
         let mut start = position;
@@ -70,37 +71,35 @@ impl<'a> Lattice<'a> {
                 next_char.general_category_group(),
                 GeneralCategoryGroup::Letter | GeneralCategoryGroup::Mark
             ) {
-                self.props.insert(key, Some(true));
+                self.props.followed_by_alpha.insert(position, true);
                 return false;
             }
         }
 
         while start + 1 < self.max_vertex
-            && self.uroman.char_is_nonspacing_mark(self.s_chars[start])
-            && self.uroman.chr_name(self.s_chars[start]).contains("NUKTA")
+            && char_is_nonspacing_mark(self.s_chars[start])
+            && self.dicts.chr_name(self.s_chars[start]).contains("NUKTA")
         {
             start += 1;
         }
 
         for end in (start + 1)..=self.max_vertex {
             let sub: String = self.s_chars[start..end].iter().collect();
-            if !self.uroman.dict_bool_get("s-prefix", &sub) {
+            if !self.dicts.is_s_prefix(&sub) {
                 break;
             }
-            if let Some(rom_rules) = self.uroman.rom_rules.get(&sub) {
-                for rom_rule in rom_rules {
-                    if !rom_rule.use_only_at_start_of_word
-                        && let Some(rom) = &rom_rule.t
-                        && P_L_OR_M.is_match(rom)
-                    {
-                        self.props.insert(key, Some(true));
-                        return false;
-                    }
+            for rom_rule in self.dicts.rom_rules(&sub) {
+                if !rom_rule.use_only_at_start_of_word
+                    && let Some(rom) = rom_rule.target()
+                    && P_L_OR_M.is_match(rom)
+                {
+                    self.props.followed_by_alpha.insert(position, true);
+                    return false;
                 }
             }
         }
 
-        self.props.insert(key, Some(false));
+        self.props.followed_by_alpha.insert(position, false);
         true
     }
 
@@ -114,7 +113,7 @@ impl<'a> Lattice<'a> {
 
         let mut adj_position = position;
         if let Some(nc) = next_char
-            && !self.uroman.dict_str_get("tone-mark", nc).is_empty()
+            && !self.dicts.tone_mark(nc).is_empty()
         {
             adj_position += 1;
             next_char = self.s_chars.get(adj_position).copied();
@@ -128,16 +127,13 @@ impl<'a> Lattice<'a> {
             if !P_L_OR_M_END.is_match(&pc.to_string()) {
                 return (false, "start-of-token".to_string());
             }
-            if self.uroman.dict_str_get("syllable-info", pc)
-                == "written-pre-consonant-spoken-post-consonant"
-            {
+            if self.dicts.syllable_info(pc) == "written-pre-consonant-spoken-post-consonant" {
                 return (false, "pre-post-vowel-on-left".to_string());
             }
         }
 
         if let Some(nc) = next_char
-            && self.uroman.dict_str_get("syllable-info", nc)
-                == "written-pre-consonant-spoken-post-consonant"
+            && self.dicts.syllable_info(nc) == "written-pre-consonant-spoken-post-consonant"
         {
             return (true, "pre-post-vowel-on-right".to_string());
         }
@@ -182,7 +178,7 @@ impl<'a> Lattice<'a> {
             return (true, format!("not-followed-by-vowel {next_char_rom}"));
         }
 
-        // Special rules for THAI CHARACTER O ANG (`\u0E2D`)
+        // Special rules for THAI CHARACTER O ANG (`อ`)
         if next_char == Some('\u{0E2D}') && next_char2.is_some() {
             let next_char2_rom = self
                 .simple_top_romanization_candidate_for_span(

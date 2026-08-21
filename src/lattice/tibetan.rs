@@ -1,7 +1,14 @@
-use super::Lattice;
-use regex::Regex;
+//! Tibetan syllable analysis: decides, for every letter of a Tibetan
+//! syllable, whether it carries the inherent vowel `a`. The results are
+//! stored in `props.edge_vowel` / `props.edge_delete` and consumed by
+//! `add_default_abugida_vowel`.
+
 use std::collections::HashSet;
 use std::sync::LazyLock;
+
+use regex::Regex;
+
+use super::Lattice;
 
 static GOOD_PREFIX_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^'?(?:.|bd|br|brg|brgy|bs|bsh|bst|bt|bts|by|bz|bzh|ch|db|dby|dk|dm|dp|dpy|dr|gl|gn|gr|gs|gt|gy|gzh|kh|khr|khy|kr|ky|ld|lh|lt|mkh|mny|mth|mtsh|ny|ph|phr|phy|rgy|rk|el|rn|rny|rt|rts|sk|skr|sky|sl|sm|sn|sny|sp|spy|sr|st|th|ts|tsh)$").unwrap()
@@ -13,16 +20,11 @@ static ROMS_CONSONANT_A_END_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"([bcdfghjklmnpqrstvwxyz].*)a$").unwrap());
 static ROM_VOWEL_END_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[aeiou]+$").unwrap());
 
-impl<'a> Lattice<'a> {
-    /// Parses Tibetan syllables to determine which characters contain an implicit vowel.
-    /// The results from this method are stored in `self.props` and utilized by `add_default_abugida_vowel` later.
-    pub fn pick_tibetan_vowel_edge(&mut self) {
-        if !self
-            .contains_script
-            .get("Tibetan")
-            .copied()
-            .unwrap_or(false)
-        {
+impl Lattice {
+    /// Parses Tibetan syllables to determine which characters contain an
+    /// implicit vowel.
+    pub(crate) fn pick_tibetan_vowel_edge(&mut self) {
+        if !self.has_script("Tibetan") {
             return;
         }
 
@@ -30,7 +32,7 @@ impl<'a> Lattice<'a> {
         let mut current_syllable_positions: Vec<usize> = Vec::new();
 
         for (i, &c) in self.s_chars.iter().enumerate() {
-            if self.uroman.chr_script_name(c) == "Tibetan" && self.char_is_letter_or_vowel_sign(c) {
+            if self.dicts.chr_script_name(c) == "Tibetan" && self.char_is_letter_or_vowel_sign(c) {
                 current_syllable_positions.push(i);
             } else if !current_syllable_positions.is_empty() {
                 tibetan_syllables.push(current_syllable_positions);
@@ -52,44 +54,40 @@ impl<'a> Lattice<'a> {
                 let mut rom = self
                     .simple_top_romanization_candidate_for_span(i, i + 1, true)
                     .unwrap_or("?".to_string());
-                self.props.insert(("edge-vowel", i), None);
+                self.props.edge_vowel.insert(i, None);
 
                 if self.char_is_vowel_sign(c) {
                     vowel_pos = Some(i);
-                    self.props.insert(("edge-vowel", i), Some(true));
+                    self.props.edge_vowel.insert(i, Some(true));
                     if roms.len() == 1 && roms[0] == "'" {
-                        self.props
-                            .insert(("edge-delete", i - 1), Some(true));
+                        self.props.edge_delete.insert(i - 1);
                     }
                 } else if self.char_is_subjoined_letter(c) {
                     subjoined_letter_positions.insert(i);
                     if i > first_letter_position {
-                        // The special index `\u0FB0` (SUBJOINED -A) converts the previous character into a vowel
+                        // SUBJOINED LETTER -A (`\u{0FB0}`) turns the previous
+                        // character into a vowel carrier
                         if c == '\u{0FB0}' {
                             vowel_pos = Some(i - 1);
-                            self.props
-                                .insert(("edge-vowel", i - 1), Some(true));
+                            self.props.edge_vowel.insert(i - 1, Some(true));
                         } else {
-                            // Other indices suppress the vowel of the previous character
-                            self.props
-                                .insert(("edge-vowel", i - 1), Some(false));
+                            // Other subjoined letters suppress the previous
+                            // character's vowel
+                            self.props.edge_vowel.insert(i - 1, Some(false));
                         }
                     }
                     rom = ROMS_CONSONANT_A_END_RE.replace(&rom, "$1").to_string();
                 } else if c == '\u{0F60}' {
-                    // TIBETAN LETTER -A
-                    self.props
-                        .insert(("edge-vowel", i), Some(false));
+                    // TIBETAN LETTER -A ('a-chung)
+                    self.props.edge_vowel.insert(i, Some(false));
                     if i > first_letter_position {
                         vowel_pos = Some(i - 1);
-                        self.props
-                            .insert(("edge-vowel", i - 1), Some(true));
+                        self.props.edge_vowel.insert(i - 1, Some(true));
                         if i == *positions.last().unwrap() {
-                            self.props
-                                .insert(("edge-delete", i), Some(true));
+                            self.props.edge_delete.insert(i);
                         }
                     }
-                    // If the previous character was a consonant, use "a'"; if a vowel, use "'"
+                    // After a consonant: "a'"; after a vowel: "'"
                     rom = if roms.last().is_none_or(|r| !ROM_VOWEL_END_RE.is_match(r)) {
                         "a'".to_string()
                     } else {
@@ -102,16 +100,11 @@ impl<'a> Lattice<'a> {
             }
 
             if vowel_pos.is_some() {
-                // If an explicit vowel is found, all other undetermined characters should be non-vowels
+                // An explicit vowel was found: all undecided characters are
+                // non-vowels
                 for &i in &positions {
-                    if self
-                        .props
-                        .get(&("edge-vowel", i))
-                        .and_then(|&v| v)
-                        .is_none()
-                    {
-                        self.props
-                            .insert(("edge-vowel", i), Some(false));
+                    if self.props.edge_vowel.get(&i).copied().flatten().is_none() {
+                        self.props.edge_vowel.insert(i, Some(false));
                     }
                 }
             } else {
@@ -122,33 +115,32 @@ impl<'a> Lattice<'a> {
                     let pre: String = roms[..=idx].join("");
                     let post: String = roms[idx + 1..].join("");
 
-                    let cost =
-                        if self.props.get(&("edge-vowel", i)) == Some(&Some(false)) {
-                            20.0
-                        } else if positions.len() == 1 {
-                            0.0
-                        } else if positions.len() == 2 {
-                            if i == positions[0] { 0.0 } else { 0.1 }
-                        } else {
-                            let good_prefix = GOOD_PREFIX_RE.is_match(&pre);
-                            let good_suffix = GOOD_SUFFIX_RE.is_match(&post);
-                            let suffix_slice = positions.get(idx + 2..).unwrap_or(&[]);
-                            let subjoined_suffix = suffix_slice
-                                .iter()
-                                .all(|p| subjoined_letter_positions.contains(p));
+                    let cost = if self.props.edge_vowel.get(&i) == Some(&Some(false)) {
+                        20.0
+                    } else if positions.len() == 1 {
+                        0.0
+                    } else if positions.len() == 2 {
+                        if i == positions[0] { 0.0 } else { 0.1 }
+                    } else {
+                        let good_prefix = GOOD_PREFIX_RE.is_match(&pre);
+                        let good_suffix = GOOD_SUFFIX_RE.is_match(&post);
+                        let suffix_slice = positions.get(idx + 2..).unwrap_or(&[]);
+                        let subjoined_suffix = suffix_slice
+                            .iter()
+                            .all(|p| subjoined_letter_positions.contains(p));
 
-                            if good_prefix && good_suffix {
-                                pre.len() as f64 * 0.1
-                            } else if good_suffix {
-                                pre.len() as f64
-                            } else if subjoined_suffix && good_prefix {
-                                pre.len() as f64 * 0.3
-                            } else if subjoined_suffix {
-                                pre.len() as f64 * 0.5
-                            } else {
-                                f64::INFINITY
-                            }
-                        };
+                        if good_prefix && good_suffix {
+                            pre.len() as f64 * 0.1
+                        } else if good_suffix {
+                            pre.len() as f64
+                        } else if subjoined_suffix && good_prefix {
+                            pre.len() as f64 * 0.3
+                        } else if subjoined_suffix {
+                            pre.len() as f64 * 0.5
+                        } else {
+                            f64::INFINITY
+                        }
+                    };
 
                     if cost < best_cost {
                         best_cost = cost;
@@ -158,8 +150,7 @@ impl<'a> Lattice<'a> {
 
                 if let Some(pos) = best_vowel_pos {
                     for &i in &positions {
-                        self.props
-                            .insert(("edge-vowel", i), Some(i == pos));
+                        self.props.edge_vowel.insert(i, Some(i == pos));
                     }
                 }
             }

@@ -1,6 +1,10 @@
-//! The romanization lattice: a graph of candidate edges over the
-//! input's character positions (indices are char counts, not byte
-//! offsets).
+//! The romanization lattice: a graph of candidate edges over the input's
+//! character positions (indices are char counts, not byte offsets).
+//!
+//! The pipeline (driven from `lib.rs`) fills the lattice in passes:
+//! script-specific preparation ([`tibetan`], [`braille`]), rule-based
+//! romanization ([`romanize`]), number recognition ([`numbers`]), fallbacks,
+//! and finally best-path extraction ([`paths`]).
 
 mod braille;
 mod numbers;
@@ -10,36 +14,53 @@ mod rules;
 mod tibetan;
 mod word_boundaries;
 
-use crate::core::UromanInner;
-use crate::edge::Edge;
 use std::collections::{HashMap, HashSet};
 
-pub(super) struct Lattice<'a> {
-    pub s: String,
-    pub s_chars: Vec<char>,
-    pub lcode: Option<String>,
-    pub uroman: &'a UromanInner,
+use crate::dicts::Dicts;
+use crate::edge::Edge;
 
-    // self.lattice[(edge.start, edge.end)]
-    pub edge_lattice: HashMap<(usize, usize), HashSet<Edge>>,
-    // self.lattice[(edge.start, 'right')]
-    pub right_links: HashMap<usize, HashSet<usize>>,
-    // self.lattice[(edge.end, 'left')]
-    pub left_links: HashMap<usize, HashSet<usize>>,
-
-    pub max_vertex: usize,
-
-    // self.props: dict
-    pub props: HashMap<(&'static str, usize), Option<bool>>,
-
-    // self.simple_top_rom_cache: dict
-    pub simple_top_rom_cache: HashMap<(usize, usize), Option<String>>,
-    // self.contains_script: defaultdict(bool)
-    pub contains_script: HashMap<String, bool>,
+pub(super) fn is_braille_char(c: char) -> bool {
+    ('\u{2800}'..='\u{28FF}').contains(&c)
 }
 
-impl<'a> Lattice<'a> {
-    pub fn new(s: &'a str, uroman: &'a UromanInner, lcode: Option<&str>) -> Self {
+/// Per-position flags and caches collected while filling the lattice.
+#[derive(Default)]
+struct CharProps {
+    /// Cache for [`Lattice::is_at_start_of_word`].
+    preceded_by_alpha: HashMap<usize, bool>,
+    /// Cache for [`Lattice::is_at_end_of_word`].
+    followed_by_alpha: HashMap<usize, bool>,
+    /// Positions capitalized by a Braille all-caps marker.
+    is_upper: HashSet<usize>,
+    /// Tibetan inherent-vowel decision per position:
+    /// absent = not in a Tibetan syllable, `None` = undecided, `Some(b)` = decided.
+    edge_vowel: HashMap<usize, Option<bool>>,
+    /// Tibetan positions whose romanization is deleted entirely.
+    edge_delete: HashSet<usize>,
+}
+
+pub(crate) struct Lattice {
+    s: String,
+    s_chars: Vec<char>,
+    lcode: Option<String>,
+    dicts: Dicts,
+
+    /// Edges by `(start, end)` span.
+    edge_lattice: HashMap<(usize, usize), HashSet<Edge>>,
+    /// For each start position, the set of end positions with edges.
+    right_links: HashMap<usize, HashSet<usize>>,
+    /// For each end position, the set of start positions with edges.
+    left_links: HashMap<usize, HashSet<usize>>,
+
+    max_vertex: usize,
+
+    props: CharProps,
+    simple_top_rom_cache: HashMap<(usize, usize), Option<String>>,
+    contains_scripts: HashSet<String>,
+}
+
+impl Lattice {
+    pub fn new(s: &str, dicts: Dicts, lcode: Option<&str>) -> Self {
         let s_chars: Vec<char> = s.chars().collect();
         let max_vertex = s_chars.len();
 
@@ -47,14 +68,14 @@ impl<'a> Lattice<'a> {
             s_chars,
             s: s.to_string(),
             lcode: lcode.map(String::from),
-            uroman,
+            dicts,
             edge_lattice: HashMap::new(),
             right_links: HashMap::new(),
             left_links: HashMap::new(),
             max_vertex,
-            props: HashMap::new(),
+            props: CharProps::default(),
             simple_top_rom_cache: HashMap::new(),
-            contains_script: HashMap::new(),
+            contains_scripts: HashSet::new(),
         };
 
         lattice.check_for_scripts();
@@ -64,17 +85,18 @@ impl<'a> Lattice<'a> {
 
     fn check_for_scripts(&mut self) {
         for &c in &self.s_chars {
-            let script_name = self.uroman.chr_script_name(c);
+            let script_name = self.dicts.chr_script_name(c);
             if !script_name.is_empty() {
-                self.contains_script.insert(script_name, true);
+                self.contains_scripts.insert(script_name.to_string());
             }
         }
-        if self
-            .s
-            .contains(|c: char| ('\u{2800}'..='\u{28FF}').contains(&c))
-        {
-            self.contains_script.insert("Braille".to_string(), true);
+        if self.s.contains(is_braille_char) {
+            self.contains_scripts.insert("Braille".to_string());
         }
+    }
+
+    fn has_script(&self, script: &str) -> bool {
+        self.contains_scripts.contains(script)
     }
 
     pub fn add_edge(&mut self, edge: Edge) {
@@ -91,15 +113,14 @@ impl<'a> Lattice<'a> {
     }
 
     fn char_is_letter_or_vowel_sign(&self, c: char) -> bool {
-        let is_vowel_sign = self.uroman.dict_bool_get("is-vowel-sign", &c.to_string());
-        self.uroman.chr_name(c).contains("LETTER") || is_vowel_sign
+        self.dicts.is_vowel_sign(c) || self.dicts.chr_name(c).contains("LETTER")
     }
 
     fn char_is_vowel_sign(&self, c: char) -> bool {
-        self.uroman.dict_bool_get("is-vowel-sign", &c.to_string())
+        self.dicts.is_vowel_sign(c)
     }
 
     fn char_is_subjoined_letter(&self, c: char) -> bool {
-        self.uroman.chr_name(c).contains("SUBJOINED LETTER")
+        self.dicts.chr_name(c).contains("SUBJOINED LETTER")
     }
 }

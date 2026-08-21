@@ -480,3 +480,20 @@ fn test_generic_tifinagh() {
         "amagrad 1 ar d ttlalan middn gan ilellitn mgaddan gh waddur d izrfan, yili ak darsn unlli d ufrak, illa flla sn ad ttmyawasn ngratsn s tagmat.",
     );
 }
+
+#[cfg(feature = "mmap")]
+#[test]
+fn test_mmap_dictionary_file() {
+    let dir = std::env::temp_dir().join("uroman-rs-test-dicts");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("dicts.rkyv");
+    std::fs::write(&path, uroman::dictionary_archive_bytes()).unwrap();
+
+    let uroman = Uroman::from_dictionary_file(&path).unwrap();
+    assert_romanizes_to_str(&uroman, "こんにちは", Some("jpn"), "konnichiha");
+
+    // A corrupt file must be rejected by validation, not crash.
+    let bad_path = dir.join("bad.rkyv");
+    std::fs::write(&bad_path, b"not an archive").unwrap();
+    assert!(Uroman::from_dictionary_file(&bad_path).is_err());
+}

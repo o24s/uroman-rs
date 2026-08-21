@@ -1,13 +1,12 @@
-use super::Lattice;
-use crate::rom_rule::RomRule;
+//! Rule selection: which romanization rule applies to a span, given its
+//! contextual restrictions.
 
-impl<'a> Lattice<'a> {
-    pub(super) fn cand_is_valid(&mut self, rule: &RomRule, start: usize, end: usize) -> bool {
-        let lcode_ok = rule.lcodes.is_empty()
-            || self
-                .lcode
-                .as_ref()
-                .is_some_and(|lc| rule.lcodes.contains(lc));
+use super::Lattice;
+use crate::dicts::Rule;
+
+impl Lattice {
+    pub(super) fn cand_is_valid(&mut self, rule: &Rule, start: usize, end: usize) -> bool {
+        let lcode_ok = rule.matches_lcode(self.lcode.as_deref());
         let start_ok = (!rule.use_only_at_start_of_word || self.is_at_start_of_word(start))
             && (!rule.dont_use_at_start_of_word || !self.is_at_start_of_word(start));
         let end_ok = (!rule.use_only_at_end_of_word || self.is_at_end_of_word(end))
@@ -17,7 +16,11 @@ impl<'a> Lattice<'a> {
         lcode_ok && start_ok && end_ok && whole_word_ok
     }
 
-    pub fn simple_top_romanization_candidate_for_span(
+    /// The best romanization for a span, if any rule applies.
+    ///
+    /// With `simple_search` the end-of-syllable alternative and the result
+    /// cache are skipped (used from contexts that probe neighboring spans).
+    pub(super) fn simple_top_romanization_candidate_for_span(
         &mut self,
         start: usize,
         end: usize,
@@ -32,26 +35,27 @@ impl<'a> Lattice<'a> {
         }
 
         let sub: String = self.s_chars[start..end].iter().collect();
-        let Some(rules) = self.uroman.rom_rules.get(&sub) else {
+        let rules = self.dicts.rom_rules(&sub);
+        if rules.is_empty() {
             if !simple_search {
                 self.simple_top_rom_cache.insert(span_range, None);
             }
             return None;
-        };
+        }
 
-        let mut best_rule_with_t: Option<&RomRule> = None;
-        let mut best_rule_without_t: Option<&RomRule> = None;
+        let mut best_rule_with_t: Option<&Rule> = None;
+        let mut best_rule_without_t: Option<&Rule> = None;
 
-        for rule in rules.iter() {
+        for rule in rules {
             if self.cand_is_valid(rule, start, end) {
-                if rule.t.is_some() {
-                    if best_rule_with_t.is_none()
-                        || rule.n_restr > best_rule_with_t.unwrap().n_restr
+                if rule.target().is_some() {
+                    if best_rule_with_t
+                        .is_none_or(|best| rule.restriction_count() > best.restriction_count())
                     {
                         best_rule_with_t = Some(rule);
                     }
-                } else if best_rule_without_t.is_none()
-                    || rule.n_restr > best_rule_without_t.unwrap().n_restr
+                } else if best_rule_without_t
+                    .is_none_or(|best| rule.restriction_count() > best.restriction_count())
                 {
                     best_rule_without_t = Some(rule);
                 }
@@ -59,8 +63,7 @@ impl<'a> Lattice<'a> {
         }
 
         let best_rule = best_rule_with_t.or(best_rule_without_t);
-
-        let best_cand = best_rule.and_then(|r| r.t.clone());
+        let best_cand = best_rule.and_then(|r| r.target().map(str::to_string));
 
         if simple_search {
             return best_cand;
@@ -71,11 +74,11 @@ impl<'a> Lattice<'a> {
             return None;
         };
 
-        let mut final_cand = rule.t.clone();
-        if let Some(t_at_end) = &rule.t_at_end_of_syllable {
+        let mut final_cand = best_cand;
+        if let Some(t_at_end) = rule.end_of_syllable_target() {
             let (is_end, _rationale) = self.is_at_end_of_syllable(end);
             if is_end {
-                final_cand = Some(t_at_end.clone());
+                final_cand = Some(t_at_end.to_string());
             }
         }
 
@@ -84,11 +87,11 @@ impl<'a> Lattice<'a> {
         final_cand
     }
 
-    pub(super) fn romanization_by_first_rule(&self, s: &str) -> Option<String> {
-        self.uroman
-            .rom_rules
-            .get(s)
-            .and_then(|rules| rules.first())
-            .and_then(|rule| rule.t.clone())
+    /// The target of the first rule for `s`, ignoring restrictions.
+    pub(super) fn romanization_by_first_rule(&self, s: &str) -> Option<&'static str> {
+        self.dicts
+            .rom_rules(s)
+            .first()
+            .and_then(|rule| rule.target())
     }
 }

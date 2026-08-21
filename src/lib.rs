@@ -12,22 +12,17 @@ use std::any::TypeId;
 use std::fmt;
 use std::io::{self, BufRead, Write};
 use std::marker::PhantomData;
-use std::sync::{Arc, LazyLock};
 use thiserror::Error;
 
-use crate::core::UromanInner;
+use crate::dicts::Dicts;
 pub use crate::edge::Edge;
 use crate::lattice::Lattice;
 use crate::utils::decode_unicode_escapes;
 
-mod core;
-mod decompositions;
+mod dicts;
 mod edge;
 mod lattice;
-mod rom_rule;
 mod utils;
-
-use rom_rule::RomRule;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum RomFormat {
@@ -216,27 +211,69 @@ pub enum RomanizationError {
     #[error(transparent)]
     Io(#[from] io::Error),
 
+    #[error("Invalid dictionary archive: {0}")]
+    InvalidDictionaryArchive(String),
+
     #[error("Internal logic error: {0}")]
     InternalError(String),
 }
 
-static GLOBAL_UROMAN_INNER: LazyLock<Arc<UromanInner>> =
-    LazyLock::new(|| Arc::new(UromanInner::new()));
+/// The raw bytes of the embedded, precompiled dictionary archive.
+///
+/// Write them to a file to create a sidecar dictionary that can be
+/// memory-mapped later with [`Uroman::from_dictionary_file`] (requires the
+/// `mmap` feature).
+pub fn dictionary_archive_bytes() -> &'static [u8] {
+    dicts::archive_bytes()
+}
 
 /// The main struct for romanization.
 ///
-/// It holds the romanization rules and provides methods to romanize strings.
-/// This corresponds to the `Uroman` class in the Python implementation.
-#[derive(Debug, Clone, Default)]
+/// It holds a handle to the romanization dictionaries and provides methods to
+/// romanize strings. This corresponds to the `Uroman` class in the Python
+/// implementation. Creating one is essentially free: the dictionaries are a
+/// process-wide shared resource.
+#[derive(Debug, Clone, Copy)]
 pub struct Uroman {
-    inner: Arc<UromanInner>,
+    dicts: Dicts,
+}
+
+impl Default for Uroman {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Uroman {
     pub fn new() -> Self {
         Self {
-            inner: Arc::clone(&GLOBAL_UROMAN_INNER),
+            dicts: Dicts::global(),
         }
+    }
+
+    /// Creates a `Uroman` backed by a memory-mapped dictionary archive
+    /// instead of the embedded one.
+    ///
+    /// The file must contain the bytes of [`dictionary_archive_bytes`]
+    /// (produced by the same version of this crate). The archive is validated
+    /// before use; the mapping stays alive for the rest of the process.
+    ///
+    /// # Safety-related caveat
+    ///
+    /// The underlying file must not be modified or truncated while the
+    /// process is running, as is inherent to memory-mapped I/O.
+    #[cfg(feature = "mmap")]
+    pub fn from_dictionary_file<P: AsRef<std::path::Path>>(
+        path: P,
+    ) -> Result<Self, RomanizationError> {
+        let file = std::fs::File::open(path)?;
+        // SAFETY: read-only mapping; see the caveat above regarding external
+        // modification of the file.
+        let mmap = unsafe { memmap2::Mmap::map(&file)? };
+        let mmap: &'static memmap2::Mmap = Box::leak(Box::new(mmap));
+        let dicts = dicts::access_external(&mmap[..])
+            .map_err(|e| RomanizationError::InvalidDictionaryArchive(e.to_string()))?;
+        Ok(Self { dicts })
     }
 
     /// Romanizes a given string.
@@ -262,7 +299,7 @@ impl Uroman {
         s: &str,
         lcode: Option<&str>,
     ) -> RomanizationOutput<F> {
-        let mut lat = Lattice::new(s, &self.inner, lcode);
+        let mut lat = Lattice::new(s, self.dicts, lcode);
 
         lat.pick_tibetan_vowel_edge();
         lat.prep_braille();

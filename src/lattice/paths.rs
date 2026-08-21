@@ -1,25 +1,29 @@
-use super::Lattice;
-use crate::edge::Edge;
-use regex::Regex;
+//! Path extraction: choosing the best edge sequence through the lattice, and
+//! expanding it with alternative romanizations.
+
 use std::collections::HashSet;
 use std::sync::LazyLock;
+
+use regex::Regex;
+
+use super::Lattice;
+use crate::edge::Edge;
 
 static ROM_SUFFIX_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\bc:([a-zA-Z]+)\s+s:([a-zA-Z]+)\b").unwrap());
 
-impl<'a> Lattice<'a> {
-    pub fn all_edges(&self, start: usize, end: usize) -> Vec<Edge> {
+impl Lattice {
+    /// All edges fully contained in `[start, end)`, grouped by start position
+    /// with longer spans first.
+    pub(crate) fn all_edges(&self, start: usize, end: usize) -> Vec<Edge> {
         let mut result = Vec::new();
 
-        // Python: for start2 in range(start, end):
         for start2 in start..end {
             if let Some(end_positions) = self.right_links.get(&start2) {
                 let mut sorted_ends: Vec<usize> = end_positions.iter().cloned().collect();
                 sorted_ends.sort_unstable_by(|a, b| b.cmp(a));
 
-                // Python: for end2 in ...
                 for &end2 in &sorted_ends {
-                    // Python: if end2 <= end:
                     if end2 <= end
                         && let Some(edges_for_span) = self.edge_lattice.get(&(start2, end2))
                     {
@@ -34,7 +38,12 @@ impl<'a> Lattice<'a> {
         result
     }
 
-    pub fn best_edge_in_span(&self, start: usize, end: usize, skip_num_edge: bool) -> Option<Edge> {
+    pub(super) fn best_edge_in_span(
+        &self,
+        start: usize,
+        end: usize,
+        skip_num_edge: bool,
+    ) -> Option<Edge> {
         let edges = self.edge_lattice.get(&(start, end))?;
 
         let mut active_num_edge = None;
@@ -79,7 +88,11 @@ impl<'a> Lattice<'a> {
             .or(inactive_num_edge)
     }
 
-    pub fn best_right_neighbor_edge(&self, start: usize, skip_num_edge: bool) -> Option<Edge> {
+    pub(super) fn best_right_neighbor_edge(
+        &self,
+        start: usize,
+        skip_num_edge: bool,
+    ) -> Option<Edge> {
         if let Some(ends) = self.right_links.get(&start) {
             let mut sorted_ends: Vec<_> = ends.iter().collect();
             sorted_ends.sort_by(|a, b| b.cmp(a));
@@ -93,7 +106,7 @@ impl<'a> Lattice<'a> {
         None
     }
 
-    pub fn best_left_neighbor_edge(&self, end: usize, skip_num_edge: bool) -> Option<Edge> {
+    pub(super) fn best_left_neighbor_edge(&self, end: usize, skip_num_edge: bool) -> Option<Edge> {
         if let Some(starts) = self.left_links.get(&end) {
             let mut sorted_starts: Vec<_> = starts.iter().collect();
             sorted_starts.sort();
@@ -138,7 +151,30 @@ impl<'a> Lattice<'a> {
         rom_s
     }
 
-    pub fn add_alternatives(&mut self, edges: &mut Vec<Edge>) {
+    /// Greedily walks the lattice left to right, picking the best edge at
+    /// each position.
+    pub(crate) fn best_rom_edge_path(
+        &mut self,
+        start: usize,
+        end: usize,
+        skip_num_edge: bool,
+    ) -> Vec<Edge> {
+        let mut result = Vec::new();
+        let mut current_pos = start;
+        while current_pos < end {
+            if let Some(best_edge) = self.best_right_neighbor_edge(current_pos, skip_num_edge) {
+                current_pos = best_edge.end();
+                result.push(best_edge);
+            } else {
+                current_pos += 1;
+            }
+        }
+        result
+    }
+
+    /// Adds alternative romanizations (`t-alt`, end-of-syllable variants) as
+    /// extra edges next to the ones already selected.
+    pub(crate) fn add_alternatives(&mut self, edges: &mut Vec<Edge>) {
         let mut existing_edges: HashSet<(usize, usize, String)> = edges
             .iter()
             .map(|e| (e.start(), e.end(), e.txt().to_string()))
@@ -147,7 +183,6 @@ impl<'a> Lattice<'a> {
         let mut new_edges_to_add = Vec::new();
 
         for base_edge in edges.clone() {
-            // Python: if old_edge.type.startswith('rom-alt'): continue
             if base_edge.r#type().starts_with("rom-alt") {
                 continue;
             }
@@ -168,89 +203,59 @@ impl<'a> Lattice<'a> {
                     (None, None)
                 };
 
-            if let Some(rom_rules) = self.uroman.rom_rules.get(&orig_s) {
-                for rom_rule in rom_rules {
-                    if !self.cand_is_valid(rom_rule, start, end) {
-                        continue;
-                    }
+            for rom_rule in self.dicts.rom_rules(&orig_s) {
+                if !self.cand_is_valid(rom_rule, start, end) {
+                    continue;
+                }
 
-                    let Some(rom_t) = &rom_rule.t else {
-                        continue;
-                    };
+                let Some(rom_t) = rom_rule.target() else {
+                    continue;
+                };
 
-                    if (rom_t == old_rom || old_rom_core == Some(rom_t.as_str()))
-                        && !rom_rule.t_alts.is_empty()
-                    {
-                        for rom_alt_base in &rom_rule.t_alts {
-                            let mut rom_alt = rom_alt_base.clone();
-                            if let (Some(core), Some(suffix)) = (old_rom_core, old_rom_suffix)
-                                && rom_t == core
-                            {
-                                rom_alt.push_str(suffix);
-                            }
-
-                            if existing_edges.insert((start, end, rom_alt.clone())) {
-                                new_edges_to_add.push(Edge::new_regular(
-                                    start,
-                                    end,
-                                    rom_alt,
-                                    "rom-alt".to_string(),
-                                ));
-                            }
-                        }
-                    }
-
-                    if let Some(rom_end_of_syllable) = &rom_rule.t_at_end_of_syllable {
-                        if rom_t == old_rom && existing_edges.insert((start, end, rom_t.clone())) {
-                            new_edges_to_add.push(Edge::new_regular(
-                                start,
-                                end,
-                                rom_t.clone(),
-                                "rom-alt2".to_string(),
-                            ));
-                        }
-
-                        if rom_end_of_syllable == old_rom
-                            && existing_edges.insert((start, end, rom_t.clone()))
+                if rom_t == old_rom || old_rom_core == Some(rom_t) {
+                    for rom_alt_base in rom_rule.alt_targets() {
+                        let mut rom_alt = rom_alt_base.to_string();
+                        if let (Some(core), Some(suffix)) = (old_rom_core, old_rom_suffix)
+                            && rom_t == core
                         {
+                            rom_alt.push_str(suffix);
+                        }
+
+                        if existing_edges.insert((start, end, rom_alt.clone())) {
                             new_edges_to_add.push(Edge::new_regular(
                                 start,
                                 end,
-                                rom_t.clone(),
-                                "rom-alt3".to_string(),
+                                rom_alt,
+                                "rom-alt".to_string(),
                             ));
                         }
+                    }
+                }
+
+                if let Some(rom_end_of_syllable) = rom_rule.end_of_syllable_target() {
+                    if rom_t == old_rom && existing_edges.insert((start, end, rom_t.to_string())) {
+                        new_edges_to_add.push(Edge::new_regular(
+                            start,
+                            end,
+                            rom_t.to_string(),
+                            "rom-alt2".to_string(),
+                        ));
+                    }
+
+                    if rom_end_of_syllable == old_rom
+                        && existing_edges.insert((start, end, rom_t.to_string()))
+                    {
+                        new_edges_to_add.push(Edge::new_regular(
+                            start,
+                            end,
+                            rom_t.to_string(),
+                            "rom-alt3".to_string(),
+                        ));
                     }
                 }
             }
         }
 
         edges.extend(new_edges_to_add);
-    }
-
-    pub fn best_rom_edge_path(
-        &mut self,
-        start: usize,
-        end: usize,
-        skip_num_edge: bool,
-    ) -> Vec<Edge> {
-        let mut result = Vec::new();
-        let mut current_pos = start;
-        while current_pos < end {
-            if let Some(best_edge) = self.best_right_neighbor_edge(current_pos, skip_num_edge) {
-                current_pos = best_edge.end();
-                result.push(best_edge);
-            } else {
-                // let skipped_char = self.s_chars.get(current_pos).unwrap();
-                // println!(
-                //     "DEBUG: No edge found at position {}. Skipping character: '{}' (U+{:X})",
-                //     current_pos,
-                //     skipped_char,
-                //     *skipped_char as u32
-                // );
-                current_pos += 1;
-            }
-        }
-        result
     }
 }
