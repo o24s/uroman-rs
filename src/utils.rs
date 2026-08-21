@@ -3,8 +3,6 @@
 use regex::Regex;
 use std::sync::{LazyLock, OnceLock};
 
-use crate::core::Value;
-
 static HAS_ESCAPE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\\(x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8})").unwrap());
 
@@ -54,16 +52,6 @@ pub fn dequote_string(s: &str) -> &str {
         }
     }
     s
-}
-
-pub fn robust_str_to_num(s: &str) -> Option<Value> {
-    if let Ok(i) = s.parse::<i64>() {
-        Some(Value::Int(i))
-    } else if let Ok(f) = s.parse::<f64>() {
-        Some(Value::Float(f))
-    } else {
-        Some(Value::String(s.to_string()))
-    }
 }
 
 pub fn decode_unicode_escapes(s: &str) -> String {

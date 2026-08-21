@@ -35,23 +35,11 @@ pub(crate) enum Value {
 }
 
 /// Represents a script with its properties.
-#[allow(unused)]
 #[derive(Debug, Clone)]
 pub(crate) struct Script {
-    pub script_name: String,
-    pub direction: Option<String>,
     pub abugida_default_vowels: Vec<String>,
-    pub alt_script_names: Vec<String>,
-    pub languages: Vec<String>,
     pub abugida_rule_type: Option<AbugidaRuleType>,
 }
-
-// #[derive(Default, Debug)]
-// struct NumPropDefaults {
-//     pub value: Option<f64>,
-//     pub num_base: Option<i64>,
-//     pub is_large_power: Option<bool>,
-// }
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub(crate) enum AbugidaRuleType {
@@ -133,13 +121,6 @@ impl UromanInner {
                 && let Some(txt) = obj.get("txt").and_then(|v| v.as_str())
             {
                 let txt_key = txt.to_string();
-
-                for bool_key in ["is-large-power"] {
-                    if obj.get(bool_key).and_then(|v| v.as_bool()).unwrap_or(false) {
-                        self.dict_bool
-                            .insert((bool_key.to_string(), txt_key.clone()), true);
-                    }
-                }
 
                 let mut prop_map: HashMap<String, Value> = HashMap::new();
                 for (key, val) in obj {
@@ -239,8 +220,6 @@ impl UromanInner {
                     continue;
                 }
 
-                let direction = utils::slot_value_in_double_colon_del_list(line, "direction")
-                    .map(|s| s.to_string());
                 let abugida_default_vowel_s =
                     utils::slot_value_in_double_colon_del_list(line, "abugida-default-vowel")
                         .unwrap_or("");
@@ -255,20 +234,10 @@ impl UromanInner {
                 let alt_script_name_s =
                     utils::slot_value_in_double_colon_del_list(line, "alt-script-name")
                         .unwrap_or("");
-                let alt_script_names = if alt_script_name_s.is_empty() {
+                let alt_script_names: Vec<String> = if alt_script_name_s.is_empty() {
                     vec![]
                 } else {
                     alt_script_name_s
-                        .split([',', ';'])
-                        .map(|s| s.trim().to_string())
-                        .collect()
-                };
-                let language_s =
-                    utils::slot_value_in_double_colon_del_list(line, "language").unwrap_or("");
-                let languages = if language_s.is_empty() {
-                    vec![]
-                } else {
-                    language_s
                         .split([',', ';'])
                         .map(|s| s.trim().to_string())
                         .collect()
@@ -294,11 +263,7 @@ impl UromanInner {
                 };
 
                 let new_script = Script {
-                    script_name: script_name.to_string(),
-                    direction,
                     abugida_default_vowels,
-                    alt_script_names: alt_script_names.clone(),
-                    languages: languages.clone(),
                     abugida_rule_type,
                 };
 
@@ -348,13 +313,6 @@ impl UromanInner {
                     );
                 }
 
-                if let Some(syllable_info) = slot_value_in_double_colon_del_list(line, "pic") {
-                    self.dict_str.insert(
-                        ("pic".to_string(), s.to_string()),
-                        syllable_info.to_string(),
-                    );
-                }
-
                 if let Some(syllable_info) = slot_value_in_double_colon_del_list(line, "name") {
                     self.dict_str.insert(
                         ("name".to_string(), s.to_string()),
@@ -383,11 +341,6 @@ impl UromanInner {
         }
         if rule.percentage_marker {
             self.percentage_markers.insert(rule.s.clone());
-        }
-
-        if rule.is_large_power {
-            self.dict_bool
-                .insert(("is-large-power".to_string(), rule.s.clone()), true);
         }
 
         self.register_s_prefix(&rule.s);
@@ -443,38 +396,6 @@ impl UromanInner {
             }
         }
     }
-
-    // /// Retrieves the numerical properties for a given character.
-    // ///
-    // /// This method looks up the character in the `num_props` map.
-    // /// If the character is not found, it returns default values.
-    // fn get_num_props(&self, c: char) -> NumPropDefaults {
-    //     self.num_props
-    //         .get(&c)
-    //         .map_or_else(NumPropDefaults::default, |props| {
-    //             let value = props.get("value").and_then(|v| match v {
-    //                 Value::Int(i) => Some(*i as f64),
-    //                 Value::Float(f) => Some(*f),
-    //                 _ => None,
-    //             });
-    //             let num_base = props.get("base").and_then(|v| match v {
-    //                 Value::Int(i) => Some(*i),
-    //                 _ => None,
-    //             });
-    //             let is_large_power = props.get("is-large-power").and_then(|v| match v {
-    //                 Value::Int(1) => Some(true),
-    //                 _ => None,
-    //             });
-
-    //             NumPropDefaults {
-    //                 value,
-    //                 num_base,
-    //                 is_large_power,
-    //             }
-    //         })
-    // }
-
-    /// A helper to get a string value from `dict_str`, returning `""` if not found.
     pub(crate) fn dict_str_get(&self, k1: &str, k2_char: char) -> &str {
         self.dict_str
             .get(&(k1.to_string(), k2_char.to_string()))
@@ -519,23 +440,6 @@ impl UromanInner {
 
         rom.map(|s| s.to_string())
     }
-
-    // /// Gets the numeric value of a character from the loaded `num_props` data.
-    // /// This is the correct replacement for Python's `unicodedata.numeric()`.
-    // ///
-    // /// It looks up the character, then the "value" key, and converts the result to `f64`.
-    // fn get_numeric_value(&self, c: char) -> Option<f64> {
-    //     self.num_props
-    //         .get(&c)
-    //         .and_then(|props| props.get("value"))
-    //         .and_then(|val| match val {
-    //             Value::Int(i) => Some(*i as f64),
-    //             Value::Float(f) => Some(*f),
-    //             _ => None,
-    //         })
-    // }
-
-    /// Checks if a character is a non-spacing mark.
     pub(crate) fn char_is_nonspacing_mark(&self, c: char) -> bool {
         use unicode_properties::UnicodeGeneralCategory;
         matches!(
@@ -543,15 +447,6 @@ impl UromanInner {
             unicode_properties::GeneralCategory::NonspacingMark
         )
     }
-
-    // /// Checks if a character is a format control character.
-    // fn char_is_format_char(&self, c: char) -> bool {
-    //     use unicode_properties::UnicodeGeneralCategory;
-    //     matches!(
-    //         c.general_category(),
-    //         unicode_properties::GeneralCategory::Format
-    //     )
-    // }
 
     pub(crate) fn chr_name(&self, c: char) -> String {
         // Check for an overridden name in dict_str.
@@ -590,23 +485,6 @@ impl UromanInner {
 
         Some(rom)
     }
-
-    // fn unicode_hangul_romanization_str(&mut self, s: &str, pass_through_p: bool) -> String {
-    //     let mut result = String::new();
-    //     for c in s.chars() {
-    //         if let Some(rom) = self.unicode_hangul_romanization(c) {
-    //             result.push_str(&rom);
-    //         } else if pass_through_p {
-    //             result.push(c);
-    //         }
-    //     }
-    //     result
-    // }
-
-    /// Returns the script name of a character.
-    ///
-    /// This is derived from `UnicodeDataProps*.txt` and stored in `dict_str`.
-    /// Returns an empty string if not found.
     pub(crate) fn chr_script_name(&self, c: char) -> String {
         self.dict_str
             .get(&("script".to_string(), c.to_string()))

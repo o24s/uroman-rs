@@ -2,6 +2,7 @@ extern crate uroman;
 
 use uroman::{RomFormat, Uroman, rom_format};
 
+#[rustfmt::skip]
 fn main() {
     let uroman = Uroman::new();
 

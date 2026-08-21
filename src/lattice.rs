@@ -90,13 +90,6 @@ pub(super) struct Lattice<'a> {
     pub contains_script: HashMap<String, bool>,
 }
 
-#[allow(unused)]
-#[derive(Debug, Clone)]
-pub enum BackwardsPathResult {
-    Str(String),
-    Edges(Vec<Edge>),
-}
-
 impl<'a> Lattice<'a> {
     pub fn new(s: &'a str, uroman: &'a UromanInner, lcode: Option<&str>) -> Self {
         let s_chars: Vec<char> = s.chars().collect();
@@ -646,57 +639,35 @@ impl<'a> Lattice<'a> {
         None
     }
 
-    fn find_rom_edge_path_backwards(
+    /// Walks the lattice right to left from `end`, concatenating the best
+    /// edges' romanizations until `min_char_len` characters are collected (or
+    /// `start` is reached).
+    fn find_rom_edge_path_backwards_str(
         &self,
         start: usize,
         end: usize,
         min_char_len: Option<usize>,
-        return_str: bool,
         skip_num_edge: bool,
-    ) -> BackwardsPathResult {
+    ) -> String {
         let mut current_pos = end;
-
-        if return_str {
-            let mut rom_s = String::new();
-            while current_pos > start {
-                let old_pos = current_pos;
-                if let Some(new_edge) = self.best_left_neighbor_edge(current_pos, skip_num_edge) {
-                    rom_s.insert_str(0, new_edge.txt());
-                    current_pos = new_edge.start();
-                }
-
-                if let Some(min_len) = min_char_len
-                    && rom_s.chars().count() >= min_len
-                {
-                    break;
-                }
-                if current_pos == old_pos {
-                    current_pos -= 1;
-                }
+        let mut rom_s = String::new();
+        while current_pos > start {
+            let old_pos = current_pos;
+            if let Some(new_edge) = self.best_left_neighbor_edge(current_pos, skip_num_edge) {
+                rom_s.insert_str(0, new_edge.txt());
+                current_pos = new_edge.start();
             }
-            BackwardsPathResult::Str(rom_s)
-        } else {
-            let mut result_edges = Vec::new();
-            while current_pos > start {
-                let old_pos = current_pos;
-                if let Some(new_edge) = self.best_left_neighbor_edge(current_pos, skip_num_edge) {
-                    result_edges.insert(0, new_edge.clone());
-                    current_pos = new_edge.start();
-                }
 
-                if let Some(min_len) = min_char_len {
-                    let current_len: usize =
-                        result_edges.iter().map(|e| e.txt().chars().count()).sum();
-                    if current_len >= min_len {
-                        break;
-                    }
-                }
-                if current_pos == old_pos {
-                    current_pos -= 1;
-                }
+            if let Some(min_len) = min_char_len
+                && rom_s.chars().count() >= min_len
+            {
+                break;
             }
-            BackwardsPathResult::Edges(result_edges)
+            if current_pos == old_pos {
+                current_pos -= 1;
+            }
         }
+        rom_s
     }
 
     fn get_decomposition(&self, c: char) -> Option<(&'static str, &'static str)> {
@@ -2059,10 +2030,7 @@ impl<'a> Lattice<'a> {
                     next_char.map_or("".to_string(), |c| self.uroman.chr_script_name(c));
                 // Python: prev_rom = self.find_rom_edge_path_backwards(0, start, 1, return_str=True)
                 let prev_rom = if start > 0 {
-                    match self.find_rom_edge_path_backwards(0, start, Some(1), true, false) {
-                        BackwardsPathResult::Str(s) => s,
-                        _ => "".to_string(),
-                    }
+                    self.find_rom_edge_path_backwards_str(0, start, Some(1), false)
                 } else {
                     "".to_string()
                 };
@@ -2272,26 +2240,6 @@ impl<'a> Lattice<'a> {
         result
     }
 
-    pub fn _print_all_edges_for_debug(&self, step_name: &str) {
-        println!("\n--- Rust: After {step_name} ---");
-
-        let mut all_edges: Vec<Edge> = self.edge_lattice.values().flatten().cloned().collect();
-
-        all_edges.sort_by(|a, b| {
-            let da = a.get_data();
-            let db = b.get_data();
-            (da.start, da.end, &da.txt, &da.r#type).cmp(&(db.start, db.end, &db.txt, &db.r#type))
-        });
-
-        if all_edges.is_empty() {
-            println!("(No edges in lattice)");
-            return;
-        }
-
-        for edge in all_edges {
-            println!("{edge:?}");
-        }
-    }
 }
 
 fn is_power_of_10(mut n: i64) -> bool {

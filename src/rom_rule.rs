@@ -9,7 +9,6 @@ use crate::{
     },
 };
 
-#[allow(unused)]
 /// Represents a single romanization rule parsed from the data files.
 #[derive(Debug, Clone)]
 pub(super) struct RomRule {
@@ -24,14 +23,10 @@ pub(super) struct RomRule {
     pub use_only_for_whole_word: bool,
     pub n_restr: usize,
     pub t_alts: Vec<String>,
-    pub num: Option<crate::core::Value>,
     pub is_minus_sign: bool,
     pub is_plus_sign: bool,
-    pub is_decimal_point: bool,
     pub fraction_connector: bool,
     pub percentage_marker: bool,
-    pub int_frac_connector: bool,
-    pub is_large_power: bool,
     pub t_at_end_of_syllable: Option<String>,
 }
 
@@ -50,14 +45,10 @@ impl RomRule {
             use_only_for_whole_word: false,
             n_restr: 0,
             t_alts: Vec::new(),
-            num: None,
             is_minus_sign: false,
             is_plus_sign: false,
-            is_decimal_point: false,
             fraction_connector: false,
             percentage_marker: false,
-            int_frac_connector: false,
-            is_large_power: false,
             t_at_end_of_syllable: None,
         }
     }
@@ -125,16 +116,10 @@ impl RomRule {
             })
             .unwrap_or_default();
 
-        let num = slot_value_in_double_colon_del_list(line, "num")
-            .and_then(crate::utils::robust_str_to_num);
-
         let is_minus_sign = has_value_in_double_colon_del_list(line, "is-minus-sign");
         let is_plus_sign = has_value_in_double_colon_del_list(line, "is-plus-sign");
-        let is_decimal_point = has_value_in_double_colon_del_list(line, "is-decimal-point");
         let fraction_connector = has_value_in_double_colon_del_list(line, "fraction-connector");
         let percentage_marker = has_value_in_double_colon_del_list(line, "percentage-marker");
-        let int_frac_connector = has_value_in_double_colon_del_list(line, "int-frac-connector");
-        let is_large_power = has_value_in_double_colon_del_list(line, "is-large-power");
         let t_at_end_of_syllable = slot_value_in_double_colon_del_list(line, "t-end-of-syllable")
             .map(|s_val| dequote_string(s_val).to_string());
 
@@ -163,14 +148,10 @@ impl RomRule {
             use_only_for_whole_word,
             n_restr,
             t_alts,
-            num,
             is_minus_sign,
             is_plus_sign,
-            is_decimal_point,
             fraction_connector,
             percentage_marker,
-            int_frac_connector,
-            is_large_power,
             t_at_end_of_syllable,
         })
     }
