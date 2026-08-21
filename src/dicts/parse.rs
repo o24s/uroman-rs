@@ -13,7 +13,9 @@ use serde_json::Value as JsonValue;
 use unicode_normalization::UnicodeNormalization;
 use unicode_properties::UnicodeGeneralCategory;
 
-use super::model::{AbugidaRuleType, Dictionaries, NumProp, RomRule, ScriptInfo};
+use super::model::{
+    AbugidaRuleType, CharRangeMap, CharRanges, Dictionaries, NumProp, RomRule, ScriptInfo,
+};
 use super::strutil::{
     dequote_string, has_value_in_double_colon_del_list, slot_value_in_double_colon_del_list,
 };
@@ -105,18 +107,18 @@ impl ParsedRule {
             && !self.use_only_for_whole_word
     }
 
-    fn into_runtime(self) -> RomRule {
+    fn to_runtime(&self) -> RomRule {
         RomRule {
-            t: self.t,
-            lcodes: self.lcodes,
+            t: self.t.clone(),
+            lcodes: self.lcodes.clone(),
             use_only_at_start_of_word: self.use_only_at_start_of_word,
             dont_use_at_start_of_word: self.dont_use_at_start_of_word,
             use_only_at_end_of_word: self.use_only_at_end_of_word,
             dont_use_at_end_of_word: self.dont_use_at_end_of_word,
             use_only_for_whole_word: self.use_only_for_whole_word,
             n_restr: self.n_restr,
-            t_alts: self.t_alts,
-            t_at_end_of_syllable: self.t_at_end_of_syllable,
+            t_alts: self.t_alts.clone(),
+            t_at_end_of_syllable: self.t_at_end_of_syllable.clone(),
         }
     }
 }
@@ -638,51 +640,119 @@ impl Builder {
         }
     }
 
+    /// Builds the character classes the romanizer used to test by substring
+    /// search over a character's Unicode name.
+    ///
+    /// The names come from the same source the runtime used:
+    /// the `::name` overrides first, then `unicode_names2`.
+    /// The classes are exactly the set of characters for which the old test was true.
+    fn char_classes(&self) -> [CharRanges; 4] {
+        let (mut letters, mut subjoined, mut nuktas, mut vocalics) =
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+
+        for cp in 0..=0x10FFFFu32 {
+            let Some(c) = char::from_u32(cp) else {
+                continue;
+            };
+            let name = self.chr_name(c);
+            if name.is_empty() {
+                continue;
+            }
+            if name.contains("LETTER") {
+                letters.push(c);
+                if name.contains("SUBJOINED LETTER") {
+                    subjoined.push(c);
+                }
+            }
+            if name.contains("NUKTA") {
+                nuktas.push(c);
+            }
+            if name.contains("VOCALIC") {
+                vocalics.push(c);
+            }
+        }
+
+        [
+            CharRanges::from_chars(letters),
+            CharRanges::from_chars(subjoined),
+            CharRanges::from_chars(nuktas),
+            CharRanges::from_chars(vocalics),
+        ]
+    }
+
     fn finalize(self) -> Dictionaries {
         let rom_rules = self
             .rom_rules
-            .into_iter()
-            .map(|(s, rules)| (s, rules.into_iter().map(ParsedRule::into_runtime).collect()))
-            .collect();
-
-        let abugida_scripts = self
-            .scripts
-            .into_iter()
-            .filter_map(|(name, script)| {
-                let rule_type = script.abugida_rule_type?;
-                Some((
-                    name,
-                    ScriptInfo {
-                        rule_type,
-                        default_vowel: script.abugida_default_vowels[0].clone(),
-                    },
-                ))
+            .iter()
+            .map(|(s, rules)| {
+                (
+                    s.clone(),
+                    rules.iter().map(ParsedRule::to_runtime).collect::<Vec<_>>(),
+                )
             })
             .collect();
 
-        let sorted = |set: HashSet<String>| {
-            let mut v: Vec<String> = set.into_iter().collect();
+        let [letters, subjoined_letters, nuktas, vocalics] = self.char_classes();
+
+        // Intern the script names: every character of a script would
+        // otherwise carry its own copy of the name.
+        let mut script_names: Vec<String> = Vec::new();
+        let mut script_ids: HashMap<&str, u16> = HashMap::new();
+        let mut char_script_pairs: Vec<(char, u16)> = Vec::with_capacity(self.char_scripts.len());
+        for (c, name) in &self.char_scripts {
+            let id = match script_ids.get(name.as_str()) {
+                Some(&id) => id,
+                None => {
+                    let id = u16::try_from(script_names.len()).expect("too many script names");
+                    script_names.push(name.clone());
+                    script_ids.insert(name.as_str(), id);
+                    id
+                }
+            };
+            char_script_pairs.push((*c, id));
+        }
+        let char_scripts = CharRangeMap::from_pairs(char_script_pairs);
+
+        // Resolve abugida behavior once per interned script, so the runtime
+        // never has to lowercase a script name to look it up.
+        let abugida_by_script = script_names
+            .iter()
+            .map(|name| {
+                let script = self.scripts.get(&name.to_lowercase())?;
+                Some(ScriptInfo {
+                    rule_type: script.abugida_rule_type?,
+                    default_vowel: script.abugida_default_vowels.first()?.clone(),
+                })
+            })
+            .collect();
+
+        let sorted = |set: &HashSet<String>| {
+            let mut v: Vec<String> = set.iter().cloned().collect();
             v.sort();
             v
         };
 
         Dictionaries {
             rom_rules,
-            s_prefixes: self.s_prefixes,
-            abugida_scripts,
-            char_scripts: self.char_scripts,
-            vowel_signs: self.vowel_signs,
-            medial_consonant_signs: self.medial_consonant_signs,
-            viramas: self.viramas,
-            tone_marks: self.tone_marks,
-            syllable_infos: self.syllable_infos,
-            char_names: self.char_names,
-            num_props: self.num_props,
-            decompositions: self.decompositions,
-            percentage_markers: sorted(self.percentage_markers),
-            fraction_connectors: sorted(self.fraction_connectors),
-            plus_signs: sorted(self.plus_signs),
-            minus_signs: sorted(self.minus_signs),
+            s_prefixes: self.s_prefixes.clone(),
+            script_names,
+            char_scripts,
+            abugida_by_script,
+            vowel_signs: self.vowel_signs.clone(),
+            medial_consonant_signs: self.medial_consonant_signs.clone(),
+            viramas: self.viramas.clone(),
+            letters,
+            subjoined_letters,
+            nuktas,
+            vocalics,
+            tone_marks: self.tone_marks.clone(),
+            syllable_infos: self.syllable_infos.clone(),
+            num_props: self.num_props.clone(),
+            decompositions: self.decompositions.clone(),
+            percentage_markers: sorted(&self.percentage_markers),
+            fraction_connectors: sorted(&self.fraction_connectors),
+            plus_signs: sorted(&self.plus_signs),
+            minus_signs: sorted(&self.minus_signs),
         }
     }
 }

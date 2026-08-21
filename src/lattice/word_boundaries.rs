@@ -78,7 +78,7 @@ impl Lattice {
 
         while start + 1 < self.max_vertex
             && char_is_nonspacing_mark(self.s_chars[start])
-            && self.dicts.chr_name(self.s_chars[start]).contains("NUKTA")
+            && self.dicts.is_nukta(self.s_chars[start])
         {
             start += 1;
         }

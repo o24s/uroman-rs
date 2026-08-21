@@ -95,23 +95,37 @@ impl Dicts {
         self.d.s_prefixes.contains(s)
     }
 
-    /// The script name of a character, or `""` if unknown.
-    pub fn chr_script_name(&self, c: char) -> &'static str {
-        self.d
-            .char_scripts
-            .get(&char_le::from_native(c))
-            .map(|s| s.as_str())
-            .unwrap_or("")
+    /// The interned id of a character's script, if it has one.
+    fn script_id(&self, c: char) -> Option<u16> {
+        self.d.char_scripts.get(c)
     }
 
-    /// The Unicode name of a character, with data-file overrides.
-    pub fn chr_name(&self, c: char) -> String {
-        if let Some(name) = self.d.char_names.get(&char_le::from_native(c)) {
-            return name.as_str().to_string();
+    /// The script name of a character, or `""` if unknown.
+    pub fn chr_script_name(&self, c: char) -> &'static str {
+        match self.script_id(c) {
+            Some(id) => self.d.script_names[id as usize].as_str(),
+            None => "",
         }
-        unicode_names2::name(c)
-            .map(|n| n.to_string())
-            .unwrap_or_default()
+    }
+
+    /// Whether a character's Unicode name marks it as a letter.
+    pub fn is_letter(&self, c: char) -> bool {
+        self.d.letters.contains(c)
+    }
+
+    /// Whether a character is a subjoined letter (Tibetan and friends).
+    pub fn is_subjoined_letter(&self, c: char) -> bool {
+        self.d.subjoined_letters.contains(c)
+    }
+
+    /// Whether a character is a nukta.
+    pub fn is_nukta(&self, c: char) -> bool {
+        self.d.nuktas.contains(c)
+    }
+
+    /// Whether a character is a vocalic letter or sign.
+    pub fn is_vocalic(&self, c: char) -> bool {
+        self.d.vocalics.contains(c)
     }
 
     pub fn is_vowel_sign(&self, c: char) -> bool {
@@ -146,12 +160,10 @@ impl Dicts {
             .unwrap_or("")
     }
 
-    /// Abugida behavior for a lowercase script name.
-    pub fn abugida_script(&self, lc_script_name: &str) -> Option<(AbugidaRuleType, &'static str)> {
-        self.d
-            .abugida_scripts
-            .get(lc_script_name)
-            .map(|info| ((&info.rule_type).into(), info.default_vowel.as_str()))
+    /// Abugida behavior for the script a character belongs to.
+    pub fn abugida_for_char(&self, c: char) -> Option<(AbugidaRuleType, &'static str)> {
+        let info = self.d.abugida_by_script[self.script_id(c)? as usize].as_ref()?;
+        Some(((&info.rule_type).into(), info.default_vowel.as_str()))
     }
 
     pub fn num_prop(&self, s: &str) -> Option<&'static ArchivedNumProp> {

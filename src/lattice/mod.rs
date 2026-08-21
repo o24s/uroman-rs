@@ -113,7 +113,7 @@ impl Lattice {
     }
 
     fn char_is_letter_or_vowel_sign(&self, c: char) -> bool {
-        self.dicts.is_vowel_sign(c) || self.dicts.chr_name(c).contains("LETTER")
+        self.dicts.is_vowel_sign(c) || self.dicts.is_letter(c)
     }
 
     fn char_is_vowel_sign(&self, c: char) -> bool {
@@ -121,6 +121,6 @@ impl Lattice {
     }
 
     fn char_is_subjoined_letter(&self, c: char) -> bool {
-        self.dicts.chr_name(c).contains("SUBJOINED LETTER")
+        self.dicts.is_subjoined_letter(c)
     }
 }

@@ -59,13 +59,96 @@ pub enum AbugidaRuleType {
     AO,
 }
 
-/// Abugida metadata for a script, keyed by lowercase script name (including
-/// alternate names). Scripts without abugida behavior are not stored: the
-/// romanizer only ever consults this map to decide inherent-vowel insertion.
+/// Abugida metadata for a script. The romanizer only consults this to decide
+/// inherent-vowel insertion, so scripts without abugida behavior store `None`.
 #[derive(Debug, Clone, Archive, Serialize, Deserialize)]
 pub struct ScriptInfo {
     pub rule_type: AbugidaRuleType,
     pub default_vowel: String,
+}
+
+/// An inclusive, sorted, non-overlapping list of character ranges.
+///
+/// Used for character classes that would otherwise be tested by substring
+/// search over a character's Unicode name. The classes are computed once at
+/// build time from the same names the runtime would have looked up, and the
+/// ranges are dense enough that this costs a few kilobytes instead of a set
+/// with an entry per character.
+#[derive(Debug, Default, Archive, Serialize, Deserialize)]
+pub struct CharRanges {
+    pub ranges: Vec<(char, char)>,
+}
+
+impl CharRanges {
+    pub fn from_chars(chars: impl IntoIterator<Item = char>) -> Self {
+        let mut chars: Vec<char> = chars.into_iter().collect();
+        chars.sort_unstable();
+        chars.dedup();
+
+        let mut ranges: Vec<(char, char)> = Vec::new();
+        for c in chars {
+            match ranges.last_mut() {
+                Some(last) if last.1 as u32 + 1 == c as u32 => last.1 = c,
+                _ => ranges.push((c, c)),
+            }
+        }
+        Self { ranges }
+    }
+}
+
+impl ArchivedCharRanges {
+    pub fn contains(&self, c: char) -> bool {
+        self.ranges
+            .binary_search_by(|r| range_cmp(r.0.to_native(), r.1.to_native(), c))
+            .is_ok()
+    }
+}
+
+/// A sorted, non-overlapping map from character ranges to a small id.
+///
+/// Character properties are assigned in contiguous blocks, so storing the
+/// runs rather than one entry per character is smaller.
+#[derive(Debug, Default, Archive, Serialize, Deserialize)]
+pub struct CharRangeMap {
+    pub ranges: Vec<(char, char, u16)>,
+}
+
+impl CharRangeMap {
+    pub fn from_pairs(pairs: impl IntoIterator<Item = (char, u16)>) -> Self {
+        let mut pairs: Vec<(char, u16)> = pairs.into_iter().collect();
+        pairs.sort_unstable();
+
+        let mut ranges: Vec<(char, char, u16)> = Vec::new();
+        for (c, id) in pairs {
+            match ranges.last_mut() {
+                Some(last) if last.2 == id && last.1 as u32 + 1 == c as u32 => last.1 = c,
+                _ => ranges.push((c, c, id)),
+            }
+        }
+        Self { ranges }
+    }
+}
+
+impl ArchivedCharRangeMap {
+    pub fn get(&self, c: char) -> Option<u16> {
+        let i = self
+            .ranges
+            .binary_search_by(|r| range_cmp(r.0.to_native(), r.1.to_native(), c))
+            .ok()?;
+        Some(self.ranges[i].2.to_native())
+    }
+}
+
+/// Orders a range against a probe character, for `binary_search_by`.
+fn range_cmp(lo: char, hi: char, probe: char) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    if probe < lo {
+        Ordering::Greater
+    } else if probe > hi {
+        Ordering::Less
+    } else {
+        Ordering::Equal
+    }
 }
 
 /// Numeric properties of a character (from `NumProps.jsonl`).
@@ -133,19 +216,25 @@ pub struct Dictionaries {
     pub rom_rules: HashMap<String, Vec<RomRule>>,
     /// Every prefix of every `rom_rules` key, for incremental span search.
     pub s_prefixes: HashSet<String>,
-    /// Lowercase script name -> abugida behavior (abugida scripts only).
-    pub abugida_scripts: HashMap<String, ScriptInfo>,
-    /// Character -> script name (from `UnicodeDataProps*.txt`).
-    pub char_scripts: HashMap<char, String>,
+    /// Every script name that appears in `UnicodeDataProps*.txt`, interned:
+    /// `char_scripts` and `abugida_by_script` index into this.
+    pub script_names: Vec<String>,
+    /// Character -> index into `script_names`.
+    pub char_scripts: CharRangeMap,
+    /// Abugida behavior per interned script, parallel to `script_names`.
+    pub abugida_by_script: Vec<Option<ScriptInfo>>,
     pub vowel_signs: HashSet<char>,
     pub medial_consonant_signs: HashSet<char>,
     pub viramas: HashSet<char>,
+    /// Character classes derived from Unicode names at build time.
+    pub letters: CharRanges,
+    pub subjoined_letters: CharRanges,
+    pub nuktas: CharRanges,
+    pub vocalics: CharRanges,
     /// Character -> tone mark class (from `UnicodeDataOverwrite.txt`).
     pub tone_marks: HashMap<char, String>,
     /// Character -> syllable placement info (e.g. Thai pre-written vowels).
     pub syllable_infos: HashMap<char, String>,
-    /// Character name overrides (checked before `unicode_names2`).
-    pub char_names: HashMap<char, String>,
     /// Numeral text -> numeric properties.
     pub num_props: HashMap<String, NumProp>,
     /// Character -> (decomposition tag, decomposed string), restricted to the

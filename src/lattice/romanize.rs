@@ -249,9 +249,7 @@ impl Lattice {
             return rom;
         }
 
-        let Some((rule_type, default_vowel)) =
-            self.dicts.abugida_script(&script_name.to_lowercase())
-        else {
+        let Some((rule_type, default_vowel)) = self.dicts.abugida_for_char(first_s_char) else {
             return rom;
         };
 
@@ -384,7 +382,7 @@ impl Lattice {
         if prev_s_char.is_none_or(|pc| self.dicts.chr_script_name(pc) != script_name) {
             return base_rom_plus_vowel;
         }
-        if self.dicts.chr_name(last_s_char).contains("VOCALIC") {
+        if self.dicts.is_vocalic(last_s_char) {
             return base_rom;
         }
         if next_s_char.is_some_and(|nc| self.dicts.chr_script_name(nc) == script_name) {
