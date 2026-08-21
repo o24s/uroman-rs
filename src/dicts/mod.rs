@@ -55,7 +55,7 @@ static GLOBAL: LazyLock<&'static ArchivedDictionaries> = LazyLock::new(|| {
 /// The raw bytes of the embedded dictionary archive.
 ///
 /// Useful for writing a sidecar dictionary file that can later be loaded with
-/// [`crate::Uroman::from_dictionary_file`] (requires the `mmap` feature).
+/// `crate::Uroman::from_dictionary_file` (requires the `mmap` feature).
 pub fn archive_bytes() -> &'static [u8] {
     DICT_BYTES
 }

@@ -221,7 +221,7 @@ pub enum RomanizationError {
 /// The raw bytes of the embedded, precompiled dictionary archive.
 ///
 /// Write them to a file to create a sidecar dictionary that can be
-/// memory-mapped later with [`Uroman::from_dictionary_file`] (requires the
+/// memory-mapped later with `Uroman::from_dictionary_file` (requires the
 /// `mmap` feature).
 pub fn dictionary_archive_bytes() -> &'static [u8] {
     dicts::archive_bytes()

@@ -12,20 +12,21 @@
 
 ## Overview
 
-`uroman-rs` is a complete rewrite of the original `uroman` (Universal Romanizer) in Rust. It provides high-speed, accurate romanization for a vast number of languages and writing systems, faithfully reproducing the behavior of the original implementation.
+`uroman-rs` is a rewrite of the original `uroman` (Universal Romanizer) in Rust. It converts text in non-Latin writing systems to the Latin alphabet.
 
-As a reimplementation, it is designed to be a drop-in replacement that passes the original's comprehensive test suite. This means its romanization logic, including its strengths and limitations, is identical to the original. For effective use, we recommend reviewing the original authors' documentation on [Reversibility](https://github.com/isi-nlp/uroman?tab=readme-ov-file#reversibility) and [Known Limitations](https://github.com/isi-nlp/uroman?tab=readme-ov-file#limitations).
+It reproduces the original's output rather than improving on it, so its romanization logic and its limitations are those of the original, apart from the cases listed under [Differences from the original](#differences-from-the-original). Before using it, read the original authors' documentation on [Reversibility](https://github.com/isi-nlp/uroman?tab=readme-ov-file#reversibility) and [Known Limitations](https://github.com/isi-nlp/uroman?tab=readme-ov-file#limitations), which apply here too.
 
-In the same spirit of fidelity, this project respects the licensing of the original `uroman` software. `uroman-rs` is licensed under the Apache License 2.0, and includes the original's license as required. For full details, please refer to the [License section](#license).
+`uroman-rs` is licensed under the Apache License 2.0 and includes the original's license notice, as required. See the [License section](#license).
 
 ## Features
 
-*   **Performance**: Achieves approximately **27x the speed** of the standard Python version, making it ideal for large-scale data processing. (See [Benchmark](#benchmark))
-*   **Robustness**: Fixes several edge-case bugs present in the original implementation, ensuring safer processing of diverse inputs. (See [Bug Fixes](#bug-fixes))
-*   **Self-Contained**: A pure Rust implementation with no dependency on external runtimes. It compiles to a single, portable binary.
-*   **High Fidelity**: Faithfully reproduces the behavior of the original `uroman` and passes its test suite.
-*   **Rich Output Formats**: Supports multiple output formats, including simple strings (`str`) and structured JSON data (`edges`, `alts`, `lattice`).
-*   **Versatile**: Can be used as a standalone Command-Line Interface (CLI) tool or as a library in your Rust applications.
+- Produces byte-identical output to `uroman.py` on the original's `multi-script.txt` test file.
+- Dictionaries are compiled at build time into a zero-copy [`rkyv`](https://github.com/rkyv/rkyv) archive that is read in place, so nothing is parsed at startup. The CLI starts in about a millisecond, and `Uroman::new()` copies a reference.
+- About 188x faster than the Python implementation on that test file, mostly because of startup. (See [Benchmark](#benchmark))
+- Does not raise on the inputs that make the original raise, and supplies the vowel where the original emits a bare apostrophe. (See [Differences from the original](#differences-from-the-original))
+- Output formats: plain string (`str`) and JSON (`edges`, `alts`, `lattice`).
+- No runtime outside the binary; builds to a single executable.
+- Usable as a command-line tool or as a library.
 
 ## Installation
 
@@ -99,25 +100,54 @@ println!("{romanized_string}");
 ```
 For more advanced examples, please see the examples/ directory.
 
+#### Memory-mapped dictionaries (optional)
+
+By default the dictionary archive is embedded in the binary. With the `mmap`
+feature you can instead load it from an external file via memory mapping,
+e.g. to share one dictionary file between many processes:
+
+```toml
+uroman = { version = "...", features = ["mmap"] }
+```
+
+```rust,ignore
+// Write the archive out once (e.g. at install time):
+std::fs::write("uroman.dicts.rkyv", uroman::dictionary_archive_bytes())?;
+
+// Later, load it with mmap (the archive is validated before use):
+let uroman = uroman::Uroman::from_dictionary_file("uroman.dicts.rkyv")?;
+```
+
 ## Benchmark
 
-Performance was measured against the original Python implementation using [`hyperfine`](https://github.com/sharkdp/hyperfine).
+Performance was measured against the original Python implementation using [`hyperfine`](https://github.com/sharkdp/hyperfine). Both produce byte-identical output on the test file.
 
-*   **Test File**: `multi-script.txt` from the original `uroman` repository.
-*   **Environment**: Intel Core i7-14700, WSL2 (Ubuntu 24.04)
+- Test File: `multi-script.txt` from the original `uroman` repository (32 lines).
+- Environment: Intel Core i7-14700, Ubuntu 26.04, `uroman.py` 1.3.1.1 via `uv run`.
 
-| Implementation                | Mean Time (± σ)       | Relative Performance |
-|-------------------------------|-----------------------|----------------------|
-| **`uroman-rs` (This project)**| **82.9 ms ± 2.4 ms**  | **~27.7x faster**     |
-| `uroman.py` (via `uv run`)    | 2295 ms ± 20 ms       | Baseline             |
+| Implementation             | Mean Time (± σ)  | Relative    |
+|----------------------------|------------------|-------------|
+| `uroman-rs`                | 7.5 ms ± 1.1 ms  | 188x faster |
+| `uroman.py` (via `uv run`) | 1407 ms ± 9 ms   | Baseline    |
 
-## Bug Fixes
+On a file this size the figure is dominated by start-up, which is where the
+gap is widest: romanizing a single line takes `uroman-rs` 0.87 ms against
+1.34 s for `uroman.py`, because the dictionaries are read from a
+precompiled archive rather than parsed on every run.
 
-`uroman-rs` aims to be not only a faithful reimplementation but also a more robust and accurate one. It handles several edge cases that can cause the original `uroman.py` script to crash or produce incorrect output.
+For sustained throughput on large inputs the ratio is smaller and depends on
+the corpus, so no single number is quoted here. Note that `uroman.py` caches
+romanizations per line, so a benchmark built by repeating the same lines
+measures that cache rather than throughput. `uroman-rs` additionally offers
+`--use-parallel` to process lines across cores.
 
-### Crash Prevention on Incomplete Patterns
+## Differences from the original
 
-For example, the original script panics on inputs with incomplete fractional patterns like `"百分之"` ("percent of..."). This occurs because the script expects a subsequent number but does not safely handle cases where one is not found, leading to a `NoneType` attribute error. This issue has been reported to the original author (see [isi-nlp/uroman#16](https://github.com/isi-nlp/uroman/issues/16)).
+`uroman-rs` departs from the original in two places: one where the original raises an exception, and one where it drops a vowel.
+
+### Incomplete percentage patterns
+
+The original script raises on inputs with an incomplete fractional pattern such as `"百分之"` ("percent of ..."), because it expects a number to follow and does not handle its absence. This has been reported upstream (see [isi-nlp/uroman#16](https://github.com/isi-nlp/uroman/issues/16)).
 
 ```sh
 $ uv run uroman.py "百分之多少"
@@ -126,52 +156,34 @@ Traceback (most recent call last):
 AttributeError: 'NoneType' object has no attribute 'value'
 ```
 
-In contrast, `uroman-rs` handles this input safely and provides a reasonable fallback romanization:
+`uroman-rs` falls back to syllable-by-syllable pinyin:
 
 ```sh
 $ uroman-rs "百分之多少"
 baifenzhiduoshao
 ```
 
-### Correct Romanization of Tibetan Letter '-A' (U+0F60)
+### Tibetan letter -A (U+0F60) standing alone
 
-In addition to improving stability, `uroman-rs` also corrects certain romanization errors found in the original implementation. A notable example is the handling of the Tibetan letter `འ` (U+0F60, TIBETAN LETTER -A).
-
-The original script incorrectly romanizes this character, which represents a consonantal onset with the inherent vowel `a`, by omitting the vowel sound entirely.
+Romanizing `འ` (U+0F60, TIBETAN LETTER -A) on its own, the original produces a bare apostrophe:
 
 ```sh
 $ uv run uroman.py "འ"
 '
 ```
 
-`uroman-rs` outputs the linguistically correct romanization, representing both the 'a-chung consonant (as an apostrophe) and the inherent vowel sound.
+The syllable is pronounced. Tibetan is an abugida, so a root letter with no vowel sign carries the inherent vowel /a/, and an output with no vowel in it is not much use to a romanizer. `uroman-rs` supplies the vowel:
 
 ```sh
 $ uroman-rs "འ"
 'a
 ```
 
-### More Precise Romanization by Distinguishing Tibetan Consonants
+The apostrophe is kept because that is how [Wylie](https://texts.mandala.library.virginia.edu/text/thl-extended-wylie-transliteration-scheme) and [ALA-LC](https://www.loc.gov/catdir/cpso/romanization/tibetan.pdf) write this letter. The phonetic [THL Simplified](https://en.wikipedia.org/wiki/THL_Simplified_Phonetic_Transcription) system would write just `a`, which would be equally defensible; the claim here is only that the bare `'` is not.
 
-The `uroman.py` implementation fails to distinguish between the low-tone onset འ ('a-chung) and the high-tone onset ཨ ('a-chen) when followed by the vowel `ེ` (`e`).
+The same applies when `འ` carries a vowel sign, where the original also drops the letter: `འེ` → `'e`, `འུ` → `'u`, `འོ` → `'o`, against `e`, `u`, `o`. `འི` is an exception, romanized `i` as in the original, through a rule this project added to `data/romanization-table.txt`.
 
-The original script produces the same output for both `འེ` and `ཨེ`.
-
-```sh
-$ uv run uroman.py "ཨེ"
-e
-$ uv run uroman.py "འེ"
-e
-```
-
-In contrast, `uroman-rs` correctly preserves the distinct consonant onset of `འ`, maintaining the distinction between the two characters as intended by the script.
-
-```sh
-$ uroman-rs "ཨེ"
-e
-$ uroman-rs "འེ"
-'e
-```
+Only `འ` as a root letter is affected. Its other uses — silent prefix, silent suffix, and the source of the nasalization in words such as `དགེ་འདུན` — are untouched, and the two implementations agree there (`འགྲོ` → `'gro`, `བའི` → `ba'i`). On the Tibetan line of the original's own `multi-script.txt` they produce identical output.
 
 ## License
 

@@ -974,7 +974,7 @@ dependencies = [
 
 [[package]]
 name = "uroman"
-version = "0.6.7"
+version = "0.7.0"
 dependencies = [
  "clap",
  "dirs",
